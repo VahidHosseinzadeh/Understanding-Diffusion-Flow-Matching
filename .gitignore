@@ -24,3 +24,8 @@ wandb/
 
 # IDE
 .vscode/
+# local env
+.venv/
+*.log
+data/
+*.egg-info/

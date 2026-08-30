@@ -1,0 +1,12 @@
+# Install torch/torchvision first with the right index for your platform, e.g.:
+#   CPU only:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   CUDA 12.1: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Then:
+#   pip install -r requirements.txt
+#   pip install -e .
+torch>=2.2
+torchvision>=0.17
+numpy
+matplotlib
+tqdm
+pytest

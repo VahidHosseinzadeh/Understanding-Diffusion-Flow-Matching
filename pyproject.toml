@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dfm"
+version = "0.1.0"
+description = "Diffusion and flow matching models, built from scratch, for learning and experimentation."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "numpy",
+    "matplotlib",
+    "tqdm",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
