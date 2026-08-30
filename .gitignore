@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# PyTorch / ML
+*.pt
+*.pth
+*.ckpt
+
+# Experiment outputs
+runs/
+outputs/
+checkpoints/
+wandb/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
