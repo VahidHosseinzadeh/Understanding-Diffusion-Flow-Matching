@@ -16,6 +16,7 @@ per step):
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import torch
@@ -40,6 +41,8 @@ def main():
     p.add_argument("--trajectories", action="store_true", help="2D only: plot noise->data paths")
     p.add_argument("--out", type=str, default=None)
     p.add_argument("--device", type=str, default="auto")
+    p.add_argument("--threads", type=int, default=None,
+                   help="torch CPU threads; default 1 for the MLP (see train.py)")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
 
@@ -57,6 +60,11 @@ def main():
     path = PATHS[meta["path"]](sigma_min=meta.get("sigma_min", 0.0))
     target = TARGETS[meta["target"]]()
     is_toy = meta["data"] in TOY_DATASETS
+
+    torch.set_num_threads(
+        args.threads if args.threads is not None
+        else (1 if meta["model"] == "mlp" else min(8, os.cpu_count() or 1))
+    )
 
     if meta["model"] == "mlp":
         model = MLP(dim=2, hidden=meta["hidden"], depth=meta["depth"])

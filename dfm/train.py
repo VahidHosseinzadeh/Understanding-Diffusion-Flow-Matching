@@ -13,6 +13,7 @@ Smoke test (seconds):
 from __future__ import annotations
 
 import argparse
+import os
 from functools import partial
 from pathlib import Path
 
@@ -62,6 +63,10 @@ def main():
     p.add_argument("--log-every-steps", type=int, default=10, help="tracker cadence")
     p.add_argument("--out-dir", type=str, default=None)
     p.add_argument("--device", type=str, default="auto")
+    p.add_argument("--threads", type=int, default=None,
+                   help="torch CPU threads. Default: 1 for the MLP, min(8, cores) "
+                        "for the UNet. On a many-core node the default of "
+                        "one-thread-per-core makes small models ~1000x slower.")
     p.add_argument("--seed", type=int, default=0)
     # experiment tracking (optional; local PNGs are written regardless)
     p.add_argument("--tracker", choices=TRACKERS, default="none")
@@ -78,6 +83,16 @@ def main():
     device = get_device(args.device)
     is_toy = args.data in TOY_DATASETS
     model_name = args.model or ("mlp" if is_toy else "unet")
+
+    # A 2D MLP does dozens of microsecond-sized ops per step. Synchronising
+    # one OpenMP thread per core across those costs far more than the work
+    # itself -- on a 48-core node that is seconds per step instead of
+    # milliseconds. Big convolutions do amortise the sync, so the UNet wants
+    # several threads. Neither default serves both.
+    threads = args.threads if args.threads is not None else (
+        1 if model_name == "mlp" else min(8, os.cpu_count() or 1)
+    )
+    torch.set_num_threads(threads)
 
     # The MLP on 2D data tolerates a much larger step than a 6M-param UNet
     # on images; one default cannot serve both.
@@ -136,7 +151,7 @@ def main():
 
     n_params = sum(q.numel() for q in model.parameters())
     print(f"device={device}  {path}  {target}  model={model_name} ({n_params/1e6:.2f}M)")
-    print(f"data={args.data}  lr={lr:g}  out_dir={out_dir}")
+    print(f"data={args.data}  lr={lr:g}  threads={threads}  out_dir={out_dir}")
 
     # Every axis goes into the tracker's config, so runs can be grouped and
     # filtered by it later -- that is what makes "did the path help?"
