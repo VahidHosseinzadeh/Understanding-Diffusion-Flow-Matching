@@ -1,4 +1,28 @@
 #!/bin/bash
+# Fashion-MNIST flow matching, as a Slurm job.
+#
+#   sbatch train.sbatch                      # submit
+#   squeue -u $USER                          # watch the queue
+#   tail -f slurm_dfm_<jobid>.log            # watch the run
+#   scancel <jobid>                          # kill it
+#
+# THE EXACT COMMAND THIS SCRIPT RUNS -- copy/paste to run it by hand
+# instead (in an `srun` session, never on the login node):
+#
+#   python dfm/train.py \
+#       --data fashion_mnist \
+#       --model unet \
+#       --epochs 30 \
+#       --batch-size 128 \
+#       --num-workers 8 \
+#       --tracker wandb \
+#       --wandb-group manual \
+#       --out-dir runs/fashion_mnist_manual
+#
+# Get an interactive GPU first:
+#   srun --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=32G \
+#        --time=2:00:00 --pty bash
+#
 #SBATCH --job-name=dfm
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1                 # this cluster wants --gres, not --gpus

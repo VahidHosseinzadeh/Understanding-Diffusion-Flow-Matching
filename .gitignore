@@ -31,3 +31,11 @@ data/
 *.egg-info/
 notebooks/
 CLAUDE.md
+
+# pytest
+.pytest_cache/
+
+# slurm job logs
+slurm_*.log
+slurm-*.out
+slurm-*.err
