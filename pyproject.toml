@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dfm"
-version = "0.1.0"
-description = "Diffusion and flow matching models, built from scratch, for learning and experimentation."
+version = "0.2.0"
+description = "Flow matching from scratch, factored into path / target / sampler axes (EDM-style)."
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.2",
@@ -14,6 +14,10 @@ dependencies = [
     "matplotlib",
     "tqdm",
 ]
+
+[project.optional-dependencies]
+# pip install -e ".[tracking]"  -- the package runs fine without it
+tracking = ["wandb>=0.16"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

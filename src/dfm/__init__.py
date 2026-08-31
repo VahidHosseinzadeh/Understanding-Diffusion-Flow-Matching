@@ -1,24 +1,41 @@
-"""dfm: diffusion and flow matching models, built from scratch.
+"""dfm -- flow matching, built from scratch, factored the EDM way.
 
-Design: one shared UNet backbone (dfm.unet.UNet) that always takes
-(x_t, t_normalized in [0, 1]) and predicts either a noise vector (DDPM)
-or a velocity vector (flow matching). Everything that differs between
-"diffusion" and "flow matching" -- how corruption is defined, what the
-training target is, how sampling integrates the model's predictions --
-lives in a small, swappable "process" object:
+A generative process in this family is three independent choices, after
+Karras et al. 2022 ("Elucidating the Design Space of Diffusion-Based
+Generative Models"). Keeping them independent is the point of the
+package: it turns "DDPM vs flow matching" from two codebases into two
+rows of a table, and makes controlled comparisons possible.
 
-    dfm.ddpm.DDPM              -- discrete-time Gaussian diffusion
-    dfm.flow_matching.RectifiedFlow -- continuous-time flow matching
+    PATH     dfm.paths     how noise and data are interpolated
+                           x_t = alpha(t)*x_data + sigma(t)*x_noise
+    TARGET   dfm.targets   what the network predicts at (x_t, t)
+                           velocity / x_data / x_noise -- interconvertible
+    SAMPLER  dfm.samplers  how the learned field is integrated
+                           dx/dt = v_theta(x, t), from t=0 to t=1
 
-Both processes expose the same two methods so dfm.trainer.Trainer can
-drive either one without caring which it is:
+with two supporting axes that vary independently of all three:
 
-    process.training_loss(model, x1) -> scalar loss
-    process.sample(model, shape, device, ...) -> generated batch
+    MODEL    dfm.mlp (2D), dfm.unet (images) -- both forward(x, t)
+    LOSS     dfm.losses    t-distribution and per-timestep weighting
 
-To try a new idea from the literature, you generally only need to
-add or modify one of: a schedule, a process class, or a sampler
-function -- see CLAUDE.md and README.md for the extension points.
+Currently implemented: LinearPath + VelocityTarget = rectified flow.
+Euler and Heun samplers. Everything else is a slot with the derivation
+written into the docstring where it goes.
+
+Convention: t = 0 is NOISE, t = 1 is DATA, everywhere, and models
+always take t as a float tensor in [0, 1] -- never a raw step index.
 """
 
-__version__ = "0.1.0"
+from .losses import interpolant_loss, logit_normal_t, uniform_t
+from .paths import LinearPath, Path
+from .samplers import euler, heun
+from .targets import Target, VelocityTarget
+
+__version__ = "0.2.0"
+
+__all__ = [
+    "Path", "LinearPath",
+    "Target", "VelocityTarget",
+    "euler", "heun",
+    "interpolant_loss", "uniform_t", "logit_normal_t",
+]

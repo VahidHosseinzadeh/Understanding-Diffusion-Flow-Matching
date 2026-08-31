@@ -29,3 +29,5 @@ wandb/
 *.log
 data/
 *.egg-info/
+notebooks/
+CLAUDE.md

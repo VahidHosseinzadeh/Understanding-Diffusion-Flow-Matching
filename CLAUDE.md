@@ -1,64 +1,82 @@
 # Project context for Claude sessions
 
-Diffusion + flow matching models built from scratch for learning, with
-Fashion-MNIST as the first dataset. See README.md for the full
-picture; this file is conventions for anyone (human or Claude) editing
-the code.
+Flow matching built from scratch for learning, factored along the axes
+from Karras et al. 2022 (EDM). Fashion-MNIST and 2D toy distributions.
+See README.md for the full picture; this file is conventions for
+anyone (human or Claude) editing the code.
 
 ## Core design invariant
 
-Every "process" (currently `dfm.ddpm.DDPM`, `dfm.flow_matching.RectifiedFlow`)
-must expose exactly:
+A generative process here is three *independent* choices. Nothing may
+collapse them back into a single object:
 
-```python
-process.training_loss(model, x1) -> torch.Tensor  # scalar
-process.sample(model, shape, device, progress=True, **kwargs) -> torch.Tensor
+```
+PATH     dfm/paths.py     x_t = alpha(t)*x_data + sigma(t)*x_noise
+TARGET   dfm/targets.py   what the net predicts at (x_t, t)
+SAMPLER  dfm/samplers.py  how dx/dt = v_theta(x, t) is integrated
 ```
 
-and every model must accept `(x, t)` with `t` a float tensor in
-`[0, 1]` (never a raw integer timestep). Keeping this contract is what
-lets `dfm.trainer.Trainer` and the CLI scripts stay agnostic to which
-process/model they're driving. When adding a new idea from the
-literature, prefer adding a new process class or a new model over
-branching inside an existing one.
+The test of the split: adding a method must not require editing
+`losses.py`, `trainer.py`, or any existing sampler. If a change forces
+one of those, the abstraction is wrong -- fix the abstraction, do not
+add a branch.
 
-## Where a new idea usually goes
+Contracts:
 
-- New corruption path / schedule -> new method or new class in
-  `ddpm.py` / `flow_matching.py`, or a new file if it's a genuinely
-  different process (e.g. `consistency.py`).
-- New training target (v-prediction, EDM preconditioning, ...) ->
-  change inside a process's `training_loss`, keep the signature.
-- New sampler -> new method on the relevant process class
-  (`DDPM.ddim_sample` is the existing example), or a standalone
-  function called from a process's `sample`.
-- New model architecture -> new file in `src/dfm/`, must implement
-  `forward(x, t) -> same-shape tensor`.
-- Conditioning (class labels, text, ...) -> extend the model's
-  `forward` signature and thread the condition through
-  `training_loss`/`sample`; keep the unconditional path working via a
-  default (e.g. `None` = drop conditioning, for classifier-free
-  guidance).
+- `Path` subclasses implement `alpha`, `sigma`, `alpha_dot`, `sigma_dot`
+  and get `interpolate`, `velocity`, `solve` for free.
+- `Target` subclasses implement `regression_target` and `to_velocity`.
+- Samplers are **functions** `(model, path, target, shape, device, ...)`,
+  never methods on a process, so any checkpoint can be decoded any way.
+- Models implement `forward(x, t) -> same-shape tensor`, with `t` a
+  float tensor in `[0, 1]` -- never a raw integer timestep.
+- `Trainer` takes `loss_fn(model, batch)` and an optional
+  `preview_fn(model, out_dir, epoch)`. It must stay ignorant of both
+  the method and the data modality (no hardcoded image shapes).
+
+## Time convention
+
+**t = 0 is noise, t = 1 is data**, everywhere. Sampling integrates
+forward, 0 -> 1. The DDPM literature runs the other way; a
+variance-preserving path must flip its schedule to match rather than
+special-casing samplers.
+
+## Where a new idea goes
+
+- New schedule / corruption -> new `Path` subclass in `paths.py`.
+- New parameterisation (eps-, x0-, v-prediction) -> new `Target` in
+  `targets.py`. The derivations are already written in that file.
+- New solver (DDIM, DPM-Solver, RK4) -> new function in `samplers.py`,
+  registered in `SAMPLERS`.
+- New t-distribution or loss weighting -> `losses.py`.
+- New architecture -> new file, must satisfy `forward(x, t)`.
+- Conditioning -> extend the model's `forward`, thread the condition
+  through `interpolant_loss` and the samplers; keep the unconditional
+  path working via a `None` default.
 
 ## Environment
 
-- Package: `src/dfm/`, installed editable (`pip install -e .`).
-- Dependencies: `requirements.txt` / `pyproject.toml`. Torch is CPU by
-  default here; install from the CUDA index on a GPU machine (see the
-  comment at the top of `requirements.txt`).
-- Tests: `pytest -q` -- fast, no dataset download, just shape/numerics
-  sanity checks (`tests/test_shapes.py`). Run these after any change to
-  `unet.py`, `ddpm.py`, `flow_matching.py`, or `trainer.py`.
-- Data: `dfm.data.get_fashion_mnist` downloads Fashion-MNIST into
-  `data/` on first use (gitignored).
-- Real training runs belong on a GPU machine, not this sandbox --
-  `python scripts/train.py --max-steps N --subset M` is the pattern
-  for a fast correctness smoke test instead.
+- Package `src/dfm/`, editable install (`pip install -e .`).
+- Same setup on macOS and the cluster; see README. No platform-specific
+  torch index needed.
+- Tests: `pytest -q` -- ~1s, no dataset download. These check numerics
+  (finite-difference derivatives, solver exactness on closed-form
+  fields), not just shapes. Run after any change to `paths.py`,
+  `targets.py`, `samplers.py`, or `losses.py`.
+- Start experiments on 2D (`--data moons`), where the velocity field is
+  directly plottable. Move to `--data fashion_mnist` after.
+- Real training belongs on a GPU machine;
+  `--max-steps N --subset M` is the smoke-test pattern here.
+- Tracking (`dfm/tracking.py`) is optional and must stay that way:
+  `wandb` is imported lazily, `NullTracker` is the default, and local
+  PNGs/`losses.json` are written regardless. Never make a code path
+  depend on a tracker being present.
 
 ## Style
 
 - Small, readable modules over cleverness -- this repo is for building
-  understanding, not for being maximally terse.
+  understanding, not for being terse.
 - Type hints on public functions/methods.
-- Every process/schedule/sampler addition should get at least one
-  `tests/test_shapes.py`-style shape/finiteness test.
+- Docstrings should say *why*, and name the paper where one applies.
+- Every path/target/sampler addition gets a numerical test, not just a
+  shape test.

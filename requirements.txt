@@ -1,12 +1,22 @@
-# Install torch/torchvision first with the right index for your platform, e.g.:
-#   CPU only:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-#   CUDA 12.1: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-# Then:
-#   pip install -r requirements.txt
-#   pip install -e .
+# A plain `pip install -r requirements.txt` works on both machines:
+#   macOS arm64   -> torch wheel with CPU + Apple MPS support
+#   Linux x86_64  -> torch wheel with CUDA bundled (the PyPI default for torch 2.x)
+# so no platform-specific --index-url is needed. dfm.utils.get_device()
+# then picks cuda > mps > cpu at runtime.
+#
+# Override the index ONLY if you need a specific CUDA version, or a
+# CPU-only build on Linux:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 torch>=2.2
 torchvision>=0.17
 numpy
 matplotlib
 tqdm
 pytest
+
+# Optional: experiment tracking. The package runs without it --
+# local PNGs and losses.json are always written either way.
+#   pip install -e ".[tracking]"
+# wandb

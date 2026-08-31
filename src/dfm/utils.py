@@ -1,4 +1,6 @@
-"""Small shared utilities: seeding, device selection, EMA, image grids."""
+"""Small shared utilities: seeding, device selection, EMA.
+
+Plotting lives in dfm.viz."""
 from __future__ import annotations
 
 import copy
@@ -58,13 +60,3 @@ class EMA:
                 v.mul_(self.decay).add_(model_v, alpha=1 - self.decay)
             else:
                 v.copy_(model_v)
-
-
-def save_image_grid(images: torch.Tensor, path: str | Path, nrow: int = 8) -> None:
-    """Save a batch of images in [-1, 1], shape (B, C, H, W), as a PNG grid."""
-    from torchvision.utils import make_grid, save_image
-
-    images = (images.clamp(-1, 1) + 1) / 2  # -> [0, 1]
-    grid = make_grid(images, nrow=nrow)
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    save_image(grid, str(path))

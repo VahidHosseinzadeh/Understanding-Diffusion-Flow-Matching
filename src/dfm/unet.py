@@ -1,17 +1,17 @@
-"""A small UNet shared by every process (DDPM, flow matching, ...).
+"""A UNet for image data (Fashion-MNIST at 28x28).
 
 Interface contract: `UNet.forward(x, t)` where
-  x: (B, C, H, W) float tensor, the noisy/interpolated input
-  t: (B,) float tensor with values in [0, 1] -- NOT raw integer
-     timesteps. DDPM normalizes its discrete step index to [0, 1]
-     before calling the model; flow matching's t is already in
-     [0, 1]. This is what lets one model architecture serve both
-     processes unmodified.
+  x: (B, C, H, W) float tensor, the interpolated input x_t
+  t: (B,) float tensor in [0, 1]
 
-Kept deliberately small and readable (no attention by default) so it
-trains fast on Fashion-MNIST on a CPU. Bump `base_channels` /
-`channel_mults` or set `use_attention=True` once you want more
-capacity.
+Identical contract to `dfm.mlp.MLP`, so the model is an independent
+choice alongside path/target/sampler -- swapping it never touches the
+process code. Time conditioning is shared with the MLP via
+`dfm.embeddings`.
+
+Kept small and readable (no attention above the lowest resolution) so
+it trains at a reasonable pace on CPU/MPS. Bump `base_channels` or
+`channel_mults` for more capacity.
 """
 from __future__ import annotations
 
@@ -21,38 +21,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-def sinusoidal_embedding(t: torch.Tensor, dim: int, max_period: float = 10000.0) -> torch.Tensor:
-    """Standard transformer-style sinusoidal embedding.
-
-    t is expected in [0, 1]; we rescale by 1000 so the frequency
-    spread matches the convention used in most diffusion papers
-    (t in [0, 1] behaves like "timestep / 1000").
-    """
-    t = t.float() * 1000.0
-    half = dim // 2
-    freqs = torch.exp(
-        -math.log(max_period) * torch.arange(half, device=t.device, dtype=torch.float32) / half
-    )
-    args = t[:, None] * freqs[None, :]
-    emb = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-    if dim % 2:
-        emb = F.pad(emb, (0, 1))
-    return emb
-
-
-class TimeMLP(nn.Module):
-    def __init__(self, dim: int, out_dim: int):
-        super().__init__()
-        self.dim = dim
-        self.net = nn.Sequential(
-            nn.Linear(dim, out_dim),
-            nn.SiLU(),
-            nn.Linear(out_dim, out_dim),
-        )
-
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        return self.net(sinusoidal_embedding(t, self.dim))
+from .embeddings import TimeEmbedding
 
 
 class ResBlock(nn.Module):
@@ -128,7 +97,7 @@ class UNet(nn.Module):
     ):
         super().__init__()
         time_dim = base_channels * 4
-        self.time_mlp = TimeMLP(base_channels, time_dim)
+        self.time_mlp = TimeEmbedding(base_channels, time_dim)
 
         self.in_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
