@@ -21,8 +21,8 @@ from typing import Callable
 import torch
 from tqdm import tqdm
 
-from .paths import Path
-from .targets import Target
+from paths import Path
+from targets import Target
 
 
 def _velocity_fn(model, path: Path, target: Target) -> Callable:

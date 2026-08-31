@@ -5,11 +5,11 @@ import pytest
 import torch
 import torch.nn as nn
 
-from dfm.losses import T_SAMPLERS, interpolant_loss, logit_normal_t, uniform_t
-from dfm.mlp import MLP
-from dfm.paths import LinearPath
-from dfm.targets import VelocityTarget
-from dfm.unet import UNet
+from losses import T_SAMPLERS, interpolant_loss, logit_normal_t, uniform_t
+from mlp import MLP
+from paths import LinearPath
+from targets import VelocityTarget
+from unet import UNet
 
 PATH, TARGET = LinearPath(), VelocityTarget()
 

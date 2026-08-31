@@ -9,12 +9,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from dfm.losses import interpolant_loss
-from dfm.mlp import MLP
-from dfm.paths import LinearPath
-from dfm.targets import VelocityTarget
-from dfm.tracking import NullTracker, Tracker, make_tracker
-from dfm.trainer import Trainer, TrainConfig
+from losses import interpolant_loss
+from mlp import MLP
+from paths import LinearPath
+from targets import VelocityTarget
+from tracking import NullTracker, Tracker, make_tracker
+from trainer import Trainer, TrainConfig
 
 
 class RecordingTracker(Tracker):

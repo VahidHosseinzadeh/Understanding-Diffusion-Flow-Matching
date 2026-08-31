@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets, transforms
 
-DATA_ROOT = _Path(__file__).resolve().parents[2] / "data"
+DATA_ROOT = _Path(__file__).resolve().parents[1] / "data"
 
 
 # --------------------------------------------------------------------

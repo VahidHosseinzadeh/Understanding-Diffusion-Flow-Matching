@@ -8,9 +8,9 @@ import pytest
 import torch
 import torch.nn as nn
 
-from dfm.paths import LinearPath
-from dfm.samplers import SAMPLERS, euler, heun
-from dfm.targets import VelocityTarget
+from paths import LinearPath
+from samplers import SAMPLERS, euler, heun
+from targets import VelocityTarget
 
 PATH, TARGET = LinearPath(), VelocityTarget()
 SHAPE = (32, 2)

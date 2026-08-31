@@ -11,13 +11,13 @@ A generative process here is three *independent* choices. Nothing may
 collapse them back into a single object:
 
 ```
-PATH     dfm/paths.py     x_t = alpha(t)*x_data + sigma(t)*x_noise
-TARGET   dfm/targets.py   what the net predicts at (x_t, t)
-SAMPLER  dfm/samplers.py  how dx/dt = v_theta(x, t) is integrated
+PATH     paths.py     x_t = alpha(t)*x_data + sigma(t)*x_noise
+TARGET   targets.py   what the net predicts at (x_t, t)
+SAMPLER  samplers.py  how dx/dt = v_theta(x, t) is integrated
 ```
 
 The test of the split: adding a method must not require editing
-`losses.py`, `trainer.py`, or any existing sampler. If a change forces
+`dfm/losses.py`, `trainer.py`, or any existing sampler. If a change forces
 one of those, the abstraction is wrong -- fix the abstraction, do not
 add a branch.
 
@@ -43,12 +43,12 @@ special-casing samplers.
 
 ## Where a new idea goes
 
-- New schedule / corruption -> new `Path` subclass in `paths.py`.
+- New schedule / corruption -> new `Path` subclass in `dfm/paths.py`.
 - New parameterisation (eps-, x0-, v-prediction) -> new `Target` in
-  `targets.py`. The derivations are already written in that file.
-- New solver (DDIM, DPM-Solver, RK4) -> new function in `samplers.py`,
+  `dfm/targets.py`. The derivations are already written in that file.
+- New solver (DDIM, DPM-Solver, RK4) -> new function in `dfm/samplers.py`,
   registered in `SAMPLERS`.
-- New t-distribution or loss weighting -> `losses.py`.
+- New t-distribution or loss weighting -> `dfm/losses.py`.
 - New architecture -> new file, must satisfy `forward(x, t)`.
 - Conditioning -> extend the model's `forward`, thread the condition
   through `interpolant_loss` and the samplers; keep the unconditional
@@ -56,13 +56,16 @@ special-casing samplers.
 
 ## Environment
 
-- Package `src/dfm/`, editable install (`pip install -e .`).
+- Flat layout: everything in `dfm/`, imported by plain name
+  (`from paths import LinearPath`). No `__init__.py`, no package, no
+  install -- `train.py` sits beside the modules so Python finds them.
+  Do not add `__init__.py`; it would break every import.
 - Same setup on macOS and the cluster; see README. No platform-specific
   torch index needed.
 - Tests: `pytest -q` -- ~1s, no dataset download. These check numerics
   (finite-difference derivatives, solver exactness on closed-form
-  fields), not just shapes. Run after any change to `paths.py`,
-  `targets.py`, `samplers.py`, or `losses.py`.
+  fields), not just shapes. Run after any change to `dfm/paths.py`,
+  `dfm/targets.py`, `dfm/samplers.py`, or `dfm/losses.py`.
 - Start experiments on 2D (`--data moons`), where the velocity field is
   directly plottable. Move to `--data fashion_mnist` after.
 - Real training belongs on a GPU machine;

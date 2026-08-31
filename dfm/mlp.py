@@ -13,7 +13,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from .embeddings import TimeEmbedding
+from embeddings import TimeEmbedding
 
 
 class MLP(nn.Module):

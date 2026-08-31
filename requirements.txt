@@ -1,7 +1,7 @@
 # A plain `pip install -r requirements.txt` works on both machines:
 #   macOS arm64   -> torch wheel with CPU + Apple MPS support
 #   Linux x86_64  -> torch wheel with CUDA bundled (the PyPI default for torch 2.x)
-# so no platform-specific --index-url is needed. dfm.utils.get_device()
+# so no platform-specific --index-url is needed. utils.get_device()
 # then picks cuda > mps > cpu at runtime.
 #
 # Override the index ONLY if you need a specific CUDA version, or a
@@ -16,7 +16,7 @@ matplotlib
 tqdm
 pytest
 
-# Optional: experiment tracking. The package runs without it --
+# Optional: experiment tracking. Everything runs without it --
 # local PNGs and losses.json are always written either way.
-#   pip install -e ".[tracking]"
+#   pip install wandb
 # wandb

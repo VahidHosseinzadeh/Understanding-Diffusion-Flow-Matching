@@ -39,7 +39,7 @@ goes -- `targets.py` shows the four lines that make eps-prediction work.
 to match, rather than special-casing the samplers.)
 
 ```
-src/dfm/
+dfm/
   paths.py      alpha(t), sigma(t) and derivatives; interpolate/velocity/solve
   targets.py    what the net regresses onto, and how to get dx/dt back
   samplers.py   euler, heun
@@ -47,47 +47,53 @@ src/dfm/
   embeddings.py sinusoidal time conditioning, shared by both models
   mlp.py        model for 2D toy data
   unet.py       model for images
-  data.py       moons / eight_gaussians / spiral, and Fashion-MNIST
+  dataset.py    moons / eight_gaussians / spiral, and Fashion-MNIST
   trainer.py    training loop; knows nothing about flow matching
   viz.py        velocity fields, trajectories, scatters, loss curves
+  tracking.py   optional Weights & Biases logging
   utils.py      seeding, device, EMA
-scripts/
-  train.py      python scripts/train.py --data moons
-  sample.py     python scripts/sample.py --checkpoint ... --sampler heun
-tests/          numerical tests, not just shape tests
+  train.py      python dfm/train.py --data moons
+  sample.py     python dfm/sample.py --checkpoint ... --sampler heun
+  tests/        numerical tests, not just shape tests
+train.sbatch    Slurm job for the image runs
+data/           Fashion-MNIST lands here (gitignored)
+runs/           checkpoints, previews, loss curves (gitignored)
 ```
+
+Flat on purpose: everything lives in `dfm/` and imports its siblings by
+plain name (`from paths import LinearPath`). `train.py` sits in there
+too, and Python puts a script's own folder on the path -- so
+`python dfm/train.py` just runs. No package, no `__init__.py`, no
+`pip install`.
 
 ## Setup
 
-The same three commands work on macOS and on the GPU cluster -- only
-stdlib `venv` + `pip` are required, and `requirements.txt` needs no
-platform-specific index (PyPI serves an MPS-capable torch wheel on
-macOS arm64 and a CUDA-bundled one on Linux x86_64):
+Nothing to install. You need Python with torch, matplotlib and tqdm --
+on a cluster that is whatever environment already has them:
+
+```bash
+module load python/3.11      # if your cluster needs it
+source activate torch2.2     # or whatever your env is called
+pytest -q                    # 26 tests, ~2s
+```
+
+Locally, if you have no torch yet:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .      # editable install of the `dfm` package
-pytest -q             # sanity checks, ~1s, no dataset download
+pytest -q
 ```
 
-`.venv/` is gitignored and is **not** portable between machines -- a
-venv hardcodes absolute paths to its base interpreter, so a venv built
-on the cluster will not run on the Mac (and vice versa). Create one per
-machine; only the repo travels.
+`.venv/` is gitignored and is not portable between machines -- create
+one per machine, never copy it to the cluster. Only the repo travels.
 
-Everything else is unchanged across machines because
-`dfm.utils.get_device()` auto-detects CUDA > MPS > CPU at runtime.
-Verify with:
+`utils.get_device()` picks CUDA > MPS > CPU, so no code changes between
+machines:
 
 ```bash
-python -c "from dfm.utils import get_device; print(get_device())"
+PYTHONPATH=dfm python -c "from utils import get_device; print(get_device())"
 ```
-
-Python 3.10+ is required (`pyproject.toml`); this repo is currently
-developed on 3.11. If the cluster pins an older CUDA than the bundled
-wheel expects, override just torch with the matching index -- see the
-comment at the top of `requirements.txt`.
 
 ## Training
 
@@ -95,7 +101,7 @@ comment at the top of `requirements.txt`.
 trains in under a minute on CPU:
 
 ```bash
-python scripts/train.py --data moons --epochs 80 --device cpu
+python dfm/train.py --data moons --epochs 80 --device cpu
 ```
 
 This writes, into `runs/moons_linear_velocity/`:
@@ -113,7 +119,7 @@ Other toys: `--data eight_gaussians` (mode coverage is obvious),
 Then images:
 
 ```bash
-python scripts/train.py --data fashion_mnist --model unet --epochs 20
+python dfm/train.py --data fashion_mnist --model unet --epochs 20
 ```
 
 Smoke test in seconds: `--max-steps 50 --epochs 1 --subset 512`.
@@ -124,7 +130,7 @@ Path, target and model are read back from the checkpoint, so the only
 thing you choose is how to decode:
 
 ```bash
-python scripts/sample.py --checkpoint runs/moons_linear_velocity/checkpoint.pt \
+python dfm/sample.py --checkpoint runs/moons_linear_velocity/checkpoint.pt \
     --sampler euler --steps 50 --trajectories
 ```
 
@@ -136,8 +142,8 @@ Compare solvers at equal *network calls*, not equal steps (Heun uses
 two per step):
 
 ```bash
-python scripts/sample.py --checkpoint ... --sampler euler --steps 10   # 10 calls
-python scripts/sample.py --checkpoint ... --sampler heun  --steps 5    # 10 calls
+python dfm/sample.py --checkpoint ... --sampler euler --steps 10   # 10 calls
+python dfm/sample.py --checkpoint ... --sampler heun  --steps 5    # 10 calls
 ```
 
 At 100+ steps every solver agrees. The interesting region is 2-20.
@@ -149,12 +155,12 @@ are always written. A tracker only *mirrors* them, so your artifacts
 never depend on the tool.
 
 ```bash
-pip install -e ".[tracking]"
+pip install wandb
 wandb login          # stores the key in ~/.netrc -- never commit a key
 ```
 
 ```bash
-python scripts/train.py --data moons --epochs 80 --tracker wandb
+python dfm/train.py --data moons --epochs 80 --tracker wandb
 ```
 
 Loss goes up every `--log-every-steps`; the sample scatter and the
@@ -168,7 +174,7 @@ to `wandb.config` (`path`, `target`, `sigma_min`, `t_dist`, `model`,
 
 ```bash
 for p in linear vp; do
-  python scripts/train.py --data fashion_mnist --path $p \
+  python dfm/train.py --data fashion_mnist --path $p \
       --tracker wandb --wandb-group path-sweep
 done
 ```

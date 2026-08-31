@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from dfm.paths import LinearPath
+from paths import LinearPath
 
 ALL_PATHS = [LinearPath(sigma_min=0.0), LinearPath(sigma_min=0.01)]
 

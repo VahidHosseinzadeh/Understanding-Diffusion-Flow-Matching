@@ -20,9 +20,9 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .tracking import NullTracker, Tracker
-from .utils import EMA
-from .viz import save_loss_curve
+from tracking import NullTracker, Tracker
+from utils import EMA
+from viz import save_loss_curve
 
 
 @dataclass

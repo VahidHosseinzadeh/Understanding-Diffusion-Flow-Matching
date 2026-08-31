@@ -2,13 +2,13 @@
 """Train a flow matching model.
 
 Start in 2D, where you can see the whole velocity field:
-    python scripts/train.py --data moons --epochs 40
+    python dfm/train.py --data moons --epochs 40
 
 Then images:
-    python scripts/train.py --data fashion_mnist --model unet --epochs 20
+    python dfm/train.py --data fashion_mnist --model unet --epochs 20
 
 Smoke test (seconds):
-    python scripts/train.py --data moons --max-steps 50 --epochs 1
+    python dfm/train.py --data moons --max-steps 50 --epochs 1
 """
 from __future__ import annotations
 
@@ -18,17 +18,17 @@ from pathlib import Path
 
 import torch
 
-from dfm.data import TOY_DATASETS, get_image_dataloader, get_toy_dataloader
-from dfm.losses import T_SAMPLERS, interpolant_loss
-from dfm.mlp import MLP
-from dfm.paths import PATHS
-from dfm.samplers import SAMPLERS
-from dfm.targets import TARGETS
-from dfm.tracking import TRACKERS, make_tracker
-from dfm.trainer import Trainer, TrainConfig
-from dfm.unet import UNet
-from dfm.utils import get_device, seed_everything
-from dfm.viz import save_image_grid, save_scatter_2d, save_velocity_field
+from dataset import TOY_DATASETS, get_image_dataloader, get_toy_dataloader
+from losses import T_SAMPLERS, interpolant_loss
+from mlp import MLP
+from paths import PATHS
+from samplers import SAMPLERS
+from targets import TARGETS
+from tracking import TRACKERS, make_tracker
+from trainer import Trainer, TrainConfig
+from unet import UNet
+from utils import get_device, seed_everything
+from viz import save_image_grid, save_scatter_2d, save_velocity_field
 
 
 def main():
@@ -51,7 +51,8 @@ def main():
     # training
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--batch-size", type=int, default=256)
-    p.add_argument("--lr", type=float, default=2e-3)
+    p.add_argument("--lr", type=float, default=None,
+                   help="default: 2e-3 for the MLP, 2e-4 for the UNet")
     p.add_argument("--n-train", type=int, default=8192, help="toy datasets only")
     p.add_argument("--subset", type=int, default=None, help="image datasets only")
     p.add_argument("--num-workers", type=int, default=2)
@@ -77,6 +78,10 @@ def main():
     device = get_device(args.device)
     is_toy = args.data in TOY_DATASETS
     model_name = args.model or ("mlp" if is_toy else "unet")
+
+    # The MLP on 2D data tolerates a much larger step than a 6M-param UNet
+    # on images; one default cannot serve both.
+    lr = args.lr if args.lr is not None else (2e-3 if model_name == "mlp" else 2e-4)
 
     path = PATHS[args.path](sigma_min=args.sigma_min)
     target = TARGETS[args.target]()
@@ -119,7 +124,7 @@ def main():
 
     out_dir = args.out_dir or f"runs/{args.data}_{args.path}_{args.target}"
     config = TrainConfig(
-        epochs=args.epochs, lr=args.lr, out_dir=out_dir, max_steps=args.max_steps,
+        epochs=args.epochs, lr=lr, out_dir=out_dir, max_steps=args.max_steps,
         preview_every_epochs=args.preview_every_epochs,
         log_every_steps=args.log_every_steps,
     )
@@ -131,7 +136,7 @@ def main():
 
     n_params = sum(q.numel() for q in model.parameters())
     print(f"device={device}  {path}  {target}  model={model_name} ({n_params/1e6:.2f}M)")
-    print(f"data={args.data}  out_dir={out_dir}")
+    print(f"data={args.data}  lr={lr:g}  out_dir={out_dir}")
 
     # Every axis goes into the tracker's config, so runs can be grouped and
     # filtered by it later -- that is what makes "did the path help?"

@@ -4,10 +4,10 @@ Interface contract: `UNet.forward(x, t)` where
   x: (B, C, H, W) float tensor, the interpolated input x_t
   t: (B,) float tensor in [0, 1]
 
-Identical contract to `dfm.mlp.MLP`, so the model is an independent
+Identical contract to `mlp.MLP`, so the model is an independent
 choice alongside path/target/sampler -- swapping it never touches the
 process code. Time conditioning is shared with the MLP via
-`dfm.embeddings`.
+`embeddings.py`.
 
 Kept small and readable (no attention above the lowest resolution) so
 it trains at a reasonable pace on CPU/MPS. Bump `base_channels` or
@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .embeddings import TimeEmbedding
+from embeddings import TimeEmbedding
 
 
 class ResBlock(nn.Module):

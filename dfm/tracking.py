@@ -79,8 +79,7 @@ class WandbTracker(Tracker):
             import wandb
         except ImportError as exc:  # pragma: no cover - depends on env
             raise ImportError(
-                "wandb is not installed. Either `pip install wandb`, or "
-                'reinstall this package with the extra: pip install -e ".[tracking]"'
+                "wandb is not installed. Run: pip install wandb"
             ) from exc
 
         self._wandb = wandb

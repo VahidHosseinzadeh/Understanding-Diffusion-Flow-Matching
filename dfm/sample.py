@@ -5,13 +5,13 @@ The path/target/model are read back from the checkpoint's `meta`, so
 the only thing you choose here is how to *decode* -- which is the point:
 one trained model, many samplers.
 
-    python scripts/sample.py --checkpoint runs/moons_linear_velocity/checkpoint.pt
-    python scripts/sample.py --checkpoint ... --sampler heun --steps 5
+    python dfm/sample.py --checkpoint runs/moons_linear_velocity/checkpoint.pt
+    python dfm/sample.py --checkpoint ... --sampler heun --steps 5
 
 Compare solvers at equal network calls, not equal steps (Heun uses two
 per step):
-    python scripts/sample.py --checkpoint ... --sampler euler --steps 10
-    python scripts/sample.py --checkpoint ... --sampler heun  --steps 5
+    python dfm/sample.py --checkpoint ... --sampler euler --steps 10
+    python dfm/sample.py --checkpoint ... --sampler heun  --steps 5
 """
 from __future__ import annotations
 
@@ -20,14 +20,14 @@ from pathlib import Path
 
 import torch
 
-from dfm.data import TOY_DATASETS
-from dfm.mlp import MLP
-from dfm.paths import PATHS
-from dfm.samplers import SAMPLERS
-from dfm.targets import TARGETS
-from dfm.unet import UNet
-from dfm.utils import get_device, seed_everything
-from dfm.viz import save_image_grid, save_scatter_2d, save_trajectories
+from dataset import TOY_DATASETS
+from mlp import MLP
+from paths import PATHS
+from samplers import SAMPLERS
+from targets import TARGETS
+from unet import UNet
+from utils import get_device, seed_everything
+from viz import save_image_grid, save_scatter_2d, save_trajectories
 
 
 def main():

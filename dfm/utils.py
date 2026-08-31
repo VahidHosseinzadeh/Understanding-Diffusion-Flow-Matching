@@ -1,6 +1,6 @@
 """Small shared utilities: seeding, device selection, EMA.
 
-Plotting lives in dfm.viz."""
+Plotting lives in viz.py."""
 from __future__ import annotations
 
 import copy

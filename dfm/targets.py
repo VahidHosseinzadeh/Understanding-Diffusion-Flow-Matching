@@ -29,7 +29,7 @@ from abc import ABC, abstractmethod
 
 import torch
 
-from .paths import Path
+from paths import Path
 
 
 class Target(ABC):

@@ -23,8 +23,8 @@ from typing import Callable
 
 import torch
 
-from .paths import Path
-from .targets import Target
+from paths import Path
+from targets import Target
 
 
 def uniform_t(batch: int, device: torch.device) -> torch.Tensor:
