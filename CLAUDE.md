@@ -11,7 +11,7 @@ A generative process here is three *independent* choices. Nothing may
 collapse them back into a single object:
 
 ```
-PATH     paths.py     x_t = alpha(t)*x_data + sigma(t)*x_noise
+PATH     paths.py     x_t = alpha(t)*x_data + beta(t)*x_noise
 TARGET   targets.py   what the net predicts at (x_t, t)
 SAMPLER  samplers.py  how dx/dt = v_theta(x, t) is integrated
 ```
@@ -23,7 +23,7 @@ add a branch.
 
 Contracts:
 
-- `Path` subclasses implement `alpha`, `sigma`, `alpha_dot`, `sigma_dot`
+- `Path` subclasses implement `alpha`, `beta`, `alpha_dot`, `beta_dot`
   and get `interpolate`, `velocity`, `solve` for free.
 - `Target` subclasses implement `regression_target` and `to_velocity`.
 - Samplers are **functions** `(model, path, target, shape, device, ...)`,

@@ -19,7 +19,7 @@ This package keeps them independent:
 | **sampler** | `samplers.py` | how is the learned field integrated? |
 
 ```
-x_t = alpha(t) * x_data + sigma(t) * x_noise        <- path
+x_t = alpha(t) * x_data + beta(t) * x_noise         <- path
       network predicts velocity / x_data / x_noise  <- target
       dx/dt = v_theta(x, t),  t: 0 -> 1             <- sampler
 ```
@@ -40,7 +40,7 @@ to match, rather than special-casing the samplers.)
 
 ```
 dfm/
-  paths.py      alpha(t), sigma(t) and derivatives; interpolate/velocity/solve
+  paths.py      alpha(t), beta(t) and derivatives; interpolate/velocity/solve
   targets.py    what the net regresses onto, and how to get dx/dt back
   samplers.py   euler, heun
   losses.py     the MSE objective, t-distribution, per-timestep weighting
@@ -168,7 +168,7 @@ velocity field are logged as image panels each preview, so you can
 scrub them across training in the browser instead of opening PNGs.
 
 **Comparing variations** is the reason to bother. Every axis is written
-to `wandb.config` (`path`, `target`, `sigma_min`, `t_dist`, `model`,
+to `wandb.config` (`path`, `target`, `beta_min`, `t_dist`, `model`,
 `seed`, ...), so the run table can be grouped or filtered by it. Use
 `--wandb-group` to tie a sweep together:
 

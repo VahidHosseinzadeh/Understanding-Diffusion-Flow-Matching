@@ -16,7 +16,7 @@
 #       --batch-size 128 \
 #       --num-workers 8 \
 #       --tracker wandb \
-#       --wandb-group manual \
+#       --wandb-group baseline \
 #       --out-dir runs/fashion_mnist_manual
 #
 # Get an interactive GPU first:
@@ -60,6 +60,11 @@ python -c "import torch; print('torch', torch.__version__)" || {
 # export WANDB_MODE=offline
 export TQDM_MININTERVAL=10       # keep the log file from filling with progress bars
 
+# wandb "group" ties related runs together in the UI so their curves overlay.
+# Give every run of one experiment the SAME group; vary one flag between them.
+#   EXPERIMENT=path-sweep sbatch train.sbatch
+EXPERIMENT="${EXPERIMENT:-baseline}"
+
 echo "node=$(hostname)  job=$SLURM_JOB_ID"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 PYTHONPATH=dfm python -c "from utils import get_device; print('device:', get_device())"
@@ -72,7 +77,8 @@ python dfm/train.py \
     --batch-size 128 \
     --num-workers "${SLURM_CPUS_PER_TASK:-4}" \
     --tracker wandb \
-    --wandb-group "${SLURM_JOB_NAME}-${SLURM_JOB_ID}" \
+    --wandb-group "$EXPERIMENT" \
+    --wandb-name "unet-${SLURM_JOB_ID}" \
     --out-dir "runs/fashion_mnist_${SLURM_JOB_ID}"
 
 echo "done."

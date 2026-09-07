@@ -40,7 +40,7 @@ def main():
     p.add_argument("--sampler", choices=list(SAMPLERS), default="euler",
                    help="used only for periodic previews during training")
     # loss knobs
-    p.add_argument("--sigma-min", type=float, default=0.0)
+    p.add_argument("--beta-min", type=float, default=0.0)
     p.add_argument("--t-dist", choices=list(T_SAMPLERS), default="uniform")
     # data / model
     p.add_argument("--data", choices=list(TOY_DATASETS) + ["fashion_mnist"], default="moons")
@@ -98,7 +98,7 @@ def main():
     # on images; one default cannot serve both.
     lr = args.lr if args.lr is not None else (2e-3 if model_name == "mlp" else 2e-4)
 
-    path = PATHS[args.path](sigma_min=args.sigma_min)
+    path = PATHS[args.path](beta_min=args.beta_min)
     target = TARGETS[args.target]()
     sampler = SAMPLERS[args.sampler]
 
@@ -144,7 +144,7 @@ def main():
         log_every_steps=args.log_every_steps,
     )
     meta = {
-        "path": args.path, "sigma_min": args.sigma_min, "target": args.target,
+        "path": args.path, "beta_min": args.beta_min, "target": args.target,
         "model": model_name, "data": args.data, "hidden": args.hidden,
         "depth": args.depth, "base_channels": args.base_channels,
     }

@@ -78,18 +78,18 @@ class VelocityTarget(Target):
 #           return x_data
 #       def to_velocity(self, path, x_t, t, pred):
 #           # pred is x_data; recover x_noise from the interpolant
-#           #   x_noise = (x_t - alpha * pred) / sigma
-#           # then    v = alpha' * pred + sigma' * x_noise
+#           #   x_noise = (x_t - alpha * pred) / beta
+#           # then    v = alpha' * pred + beta' * x_noise
 #
 #   class NoiseTarget(Target):         # eps-prediction, as in DDPM
 #       def regression_target(self, path, x_data, x_noise, t):
 #           return x_noise
 #       def to_velocity(self, path, x_t, t, pred):
-#           #   x_data = (x_t - sigma * pred) / alpha
-#           # then    v = alpha' * x_data + sigma' * pred
+#           #   x_data = (x_t - beta * pred) / alpha
+#           # then    v = alpha' * x_data + beta' * pred
 #
 # Watch for the endpoint singularities when you do: DataTarget divides
-# by sigma(1) = 0 and NoiseTarget divides by alpha(0) = 0. That is not a
+# by beta(1) = 0 and NoiseTarget divides by alpha(0) = 0. That is not a
 # bug in the algebra, it is a real property of those parameterisations,
 # and handling it is half of what EDM's preconditioning is for.
 # ---------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Tests for the path axis.
 
 These check the *math*, not just shapes: a path that returns
-inconsistent alpha_dot/sigma_dot would train a subtly wrong velocity
+inconsistent alpha_dot/beta_dot would train a subtly wrong velocity
 field and still produce plausible-looking pictures, so the derivative
 check below is the one that actually protects you.
 """
@@ -12,19 +12,19 @@ import torch
 
 from paths import LinearPath
 
-ALL_PATHS = [LinearPath(sigma_min=0.0), LinearPath(sigma_min=0.01)]
+ALL_PATHS = [LinearPath(beta_min=0.0), LinearPath(beta_min=0.01)]
 
 
 @pytest.mark.parametrize("path", ALL_PATHS)
 def test_endpoints(path):
-    """t=0 must be pure noise, t=1 pure data (up to sigma_min)."""
+    """t=0 must be pure noise, t=1 pure data (up to beta_min)."""
     x_data, x_noise = torch.randn(8, 2), torch.randn(8, 2)
 
     at_0 = path.interpolate(x_data, x_noise, torch.zeros(8))
     assert torch.allclose(at_0, x_noise, atol=1e-6)
 
     at_1 = path.interpolate(x_data, x_noise, torch.ones(8))
-    assert torch.allclose(at_1, x_data + path.sigma_min * x_noise, atol=1e-6)
+    assert torch.allclose(at_1, x_data + path.beta_min * x_noise, atol=1e-6)
 
 
 @pytest.mark.parametrize("path", ALL_PATHS)
@@ -32,8 +32,8 @@ def test_velocity_matches_finite_difference(path):
     """velocity() must be the actual time derivative of interpolate().
 
     Central difference: (x_{t+h} - x_{t-h}) / 2h -> dx/dt as h -> 0.
-    This catches an alpha_dot/sigma_dot that disagrees with its own
-    alpha/sigma, which is the classic error when adding a new schedule.
+    This catches an alpha_dot/beta_dot that disagrees with its own
+    alpha/beta, which is the classic error when adding a new schedule.
     """
     # float64: a central difference with h=1e-4 cancels away roughly four
     # significant digits, which is most of what float32 has.

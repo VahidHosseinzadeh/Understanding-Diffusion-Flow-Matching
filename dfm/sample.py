@@ -57,7 +57,7 @@ def main():
             "and cannot be reconstructed unambiguously. Retrain it."
         )
 
-    path = PATHS[meta["path"]](sigma_min=meta.get("sigma_min", 0.0))
+    path = PATHS[meta["path"]](beta_min=meta.get("beta_min", 0.0))
     target = TARGETS[meta["target"]]()
     is_toy = meta["data"] in TOY_DATASETS
 
