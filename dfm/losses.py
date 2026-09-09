@@ -59,14 +59,20 @@ def interpolant_loss(
     draw a time, interpolate, regress. Everything a specific method adds
     on top of that lives behind `path` and `target`.
     """
+
+    # sampling noise and time (note that we have independent coupling of noise and data here)
     batch = x_data.shape[0]
     x_noise = torch.randn_like(x_data)
     t = t_sampler(batch, x_data.device)
 
+
+    # interpolation depending what is the path and defining x_t, and 
+    # also definig the target our model wants to learn (can be velocity, score, noise, x_data, etc.)
     x_t = path.interpolate(x_data, x_noise, t)
     y = target.regression_target(path, x_data, x_noise, t)
     pred = model(x_t, t)
 
+    # loss between prediction and the target, optionally weighted by a function of t
     se = (pred - y).pow(2).flatten(1).mean(dim=1)  # per-sample squared error
     if weighting is not None:
         se = se * weighting(t)

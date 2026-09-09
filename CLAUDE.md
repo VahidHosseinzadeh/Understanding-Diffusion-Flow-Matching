@@ -25,7 +25,9 @@ Contracts:
 
 - `Path` subclasses implement `alpha`, `beta`, `alpha_dot`, `beta_dot`
   and get `interpolate`, `velocity`, `solve` for free.
-- `Target` subclasses implement `regression_target` and `to_velocity`.
+- `Target` subclasses implement `regression_target` and `to_velocity`,
+  and override `t_range` if inverting the interpolant is singular at an
+  endpoint (as it is for every target except velocity).
 - Samplers are **functions** `(model, path, target, shape, device, ...)`,
   never methods on a process, so any checkpoint can be decoded any way.
 - Models implement `forward(x, t) -> same-shape tensor`, with `t` a
@@ -44,8 +46,9 @@ special-casing samplers.
 ## Where a new idea goes
 
 - New schedule / corruption -> new `Path` subclass in `dfm/paths.py`.
-- New parameterisation (eps-, x0-, v-prediction) -> new `Target` in
-  `dfm/targets.py`. The derivations are already written in that file.
+- New parameterisation -> new `Target` in `dfm/targets.py`. velocity,
+  x_data and noise are implemented; score prediction is sketched there.
+  A target that inverts the interpolant must declare its `t_range`.
 - New solver (DDIM, DPM-Solver, RK4) -> new function in `dfm/samplers.py`,
   registered in `SAMPLERS`.
 - New t-distribution or loss weighting -> `dfm/losses.py`.

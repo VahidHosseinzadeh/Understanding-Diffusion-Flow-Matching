@@ -53,7 +53,8 @@ def euler(
     """
     v = _velocity_fn(model, path, target)
     x = torch.randn(shape, device=device)
-    ts = torch.linspace(0.0, 1.0, steps + 1, device=device)
+    t0, t1 = target.t_range()
+    ts = torch.linspace(t0, t1, steps + 1, device=device)
     traj = [x.clone()] if return_trajectory else None
 
     it = range(steps)
@@ -95,7 +96,8 @@ def heun(
     """
     v = _velocity_fn(model, path, target)
     x = torch.randn(shape, device=device)
-    ts = torch.linspace(0.0, 1.0, steps + 1, device=device)
+    t0, t1 = target.t_range()
+    ts = torch.linspace(t0, t1, steps + 1, device=device)
     traj = [x.clone()] if return_trajectory else None
 
     it = range(steps)

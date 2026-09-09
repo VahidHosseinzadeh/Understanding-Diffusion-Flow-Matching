@@ -29,10 +29,11 @@ methods on a process object, so one checkpoint can be decoded many
 ways. The loss is written against `(path, target)`, so it never changes
 when you add a method. `Trainer` knows only `loss_fn(model, batch)`.
 
-**Currently implemented:** `LinearPath` + `VelocityTarget` = rectified
-flow, with Euler and Heun samplers. The other slots are empty on
-purpose, with the derivations written into the docstring where each one
-goes -- `targets.py` shows the four lines that make eps-prediction work.
+**Currently implemented:** `LinearPath`, three targets (`velocity`,
+`x_data`, `noise`), and Euler + Heun samplers. So the target axis is
+live: same path, same data, same sampler, three parameterisations of
+the same model, selected with `--target`. Score prediction is sketched
+in `targets.py` where it goes.
 
 **Time convention:** `t = 0` is noise, `t = 1` is data, everywhere.
 (DDPM literature runs the other way. A VP path must flip its schedule
@@ -192,6 +193,40 @@ wandb sync <out_dir>/wandb/offline-run-*    # upload later
 On the cluster, set `WANDB_API_KEY` from your shell profile or the
 scheduler's secret store rather than running `wandb login`.
 
+### Targets are not interchangeable in practice
+
+Mathematically the three targets are one model. Empirically they are
+not, and the reason is worth understanding before you trust any of
+them.
+
+`to_velocity` has to invert the interpolant for every parameterisation
+except velocity, and that division blows up where its coefficient
+vanishes -- `alpha(0) = 0` for noise-prediction, `beta(1) = 0` for
+x_data-prediction. Both are 0/0, so the answer is finite in exact
+arithmetic, but any error the network has gets amplified without bound
+as you approach the bad end.
+
+Measured on 2D moons, 60 epochs, identical seed, mean distance from a
+sample to the nearest real data point (lower is better):
+
+| target | euler | heun |
+|---|---|---|
+| `velocity` | 0.046 | 0.045 |
+| `x_data` | 0.104 | 0.106 |
+| `noise` | 0.491 | 0.473 |
+
+Before each target declared a `t_range` to keep samplers off its
+singular endpoint, the same numbers were **3039** for `noise` + euler
+(which evaluates at t=0) and **5.3** for `x_data` + heun (whose
+look-ahead lands on t=1). Silently finite, entirely wrong -- the
+magnitude floor in `targets.py` turns a NaN into plausible-looking
+garbage, which is worse than a crash.
+
+Even with the endpoints trimmed, noise-prediction stays ~10x behind
+velocity here. That is not a bug to fix: it is why flow matching
+prefers velocity, why DDPM's own samplers work directly in eps space
+instead of converting, and what EDM's preconditioning is for.
+
 ## Tests
 
 ```bash
@@ -209,9 +244,9 @@ otherwise train a subtly wrong field and still make plausible pictures.
 1. Read `paths.py`, then `losses.py`. That is the whole method: draw
    noise, draw a time, interpolate, regress.
 2. Train on `moons` and watch `field_epoch*.png` across epochs.
-3. Implement `DataTarget` and `NoiseTarget` in `targets.py` (four lines
-   each -- `Path.solve` does the work). Train all three and compare.
-   Note where they blow up at the endpoints; that is what EDM's
-   preconditioning exists to fix.
+3. Compare the three targets: `--target velocity`, `--target x_data`,
+   `--target noise` on the same data. They are the same model
+   reparameterised, but not equally well behaved -- see "Targets are
+   not interchangeable in practice" below.
 4. Add a variance-preserving `Path` -- that is DDPM, and it should
    require no change to the loss, the trainer, or any sampler.
