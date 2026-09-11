@@ -7,8 +7,6 @@ characteristically breaks:
 
   loss_vs_time            is training uniformly hard across t, or is some
                           band of noise levels dominating the objective?
-  straightness            how close to straight are the sampled paths?
-                          (rectified flow's central claim, measurable)
   velocity_norm_vs_time   does the drift explode near an endpoint? This is
                           the failure mode non-velocity targets have by
                           construction -- see `Target.t_range`.
@@ -73,32 +71,6 @@ class LossTimeProfile:
 
     def is_empty(self) -> bool:
         return bool(self._count.sum() == 0)
-
-
-@torch.no_grad()
-def straightness(trajectory: torch.Tensor) -> torch.Tensor:
-    """Per-sample straightness of an ODE trajectory, in (0, 1].
-
-        ||X_1 - X_0|| / sum_k ||X_{k+1} - X_k||
-
-    Straight-line path -> 1.0. A wandering path has a path length much
-    longer than the distance it covers, so the ratio falls toward 0.
-
-    This is rectified flow's headline claim made measurable: the straighter
-    the learned paths, the less discretisation error a few-step sampler
-    incurs. Expect it to rise over training, and to be highest for the
-    linear path with a velocity target.
-
-    `trajectory` is the (steps+1, B, ...) stack a sampler returns with
-    return_trajectory=True. Returns (B,).
-    """
-    if trajectory.dim() < 2 or trajectory.shape[0] < 2:
-        raise ValueError(f"need a (steps+1, B, ...) trajectory, got {tuple(trajectory.shape)}")
-
-    flat = trajectory.flatten(2) if trajectory.dim() > 2 else trajectory.unsqueeze(-1)
-    endpoint_distance = (flat[-1] - flat[0]).norm(dim=-1)
-    path_length = (flat[1:] - flat[:-1]).norm(dim=-1).sum(dim=0)
-    return endpoint_distance / path_length.clamp(min=1e-12)
 
 
 @torch.no_grad()

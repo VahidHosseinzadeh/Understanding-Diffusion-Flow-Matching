@@ -44,7 +44,7 @@ dfm/
   paths.py      alpha(t), beta(t) and derivatives; interpolate/velocity/solve
   targets.py    what the net regresses onto, and how to get dx/dt back
   samplers.py   euler, heun, euler_maruyama (SDE)
-  diagnostics.py loss-vs-t, straightness, velocity norms, budget matrix
+  diagnostics.py loss-vs-t, velocity norms, solver budget matrix
   losses.py     the MSE objective, t-distribution, per-timestep weighting
   embeddings.py sinusoidal time conditioning, shared by both models
   mlp.py        model for 2D toy data
@@ -108,6 +108,11 @@ python dfm/train.py --data moons --epochs 80 --device cpu
 
 This writes, into `runs/moons_linear_velocity/`:
 
+- `filmstrip_epoch*.png` -- **noise → data in a row.** One row per
+  sample, time running left to right, so you see a single generation
+  unfold rather than a finished grid. Comes free: the preview already
+  samples, and the filmstrip is that same trajectory. `--filmstrip-frames 0`
+  turns it off, any other number sets the column count.
 - `field_epoch*.png` -- the learned velocity field at t = 0, .25, .5, .75, 1.
   **This is the plot to look at.** Early in t the field should sweep
   broadly inward from everywhere; by t = 1 it should be near zero on the
@@ -242,11 +247,10 @@ python dfm/train.py --data fashion_mnist --diagnostics --tracker wandb
 | panel | what it answers |
 |---|---|
 | `loss_vs_time` | is training uniformly hard across t, or is one band of noise levels soaking up the gradient? 20 bins, fed from the training loss itself -- no extra forward passes |
-| `straightness` | how straight are the sampled paths? `\|x1-x0\| / path length`, mean + histogram |
 | `velocity_norm_vs_time` | does the drift explode near an endpoint? log-scaled, sweeps the full [0,1] |
 | `sampler_matrix` | solver x budget grid at **equal network calls** (images only) |
 
-Plus scalars `straightness_index`, `velocity_norm_mean`, `velocity_norm_max`.
+Plus scalars `velocity_norm_mean` and `velocity_norm_max`.
 
 Costs about 5s per preview, so it is off by default. Raise
 `--preview-every-epochs` if you want it on a long run.
@@ -255,24 +259,16 @@ Costs about 5s per preview, so it is off by default. Raise
 
 Trained on 2D moons, 40 epochs, one run per target:
 
-| target | ‖u‖ @t=0 | @t=0.5 | @t=1 | straightness |
-|---|---|---|---|---|
-| `velocity` | 0.63 | 0.47 | 0.96 | 0.703 |
-| `x_data` | 1.10 | 0.53 | **4177** | 0.938 |
-| `noise` | **4548** | 0.89 | 1.20 | 0.985 |
+| target | ‖u‖ @t=0 | @t=0.5 | @t=1 |
+|---|---|---|---|
+| `velocity` | 0.63 | 0.47 | 0.96 |
+| `x_data` | 1.10 | 0.53 | **4177** |
+| `noise` | **4548** | 0.89 | 1.20 |
 
 Each target explodes at exactly the endpoint its `to_velocity` divides
 by zero at -- `beta(1)=0` for x_data, `alpha(0)=0` for noise -- and
 velocity, which inverts nothing, stays flat. That is the diagnostic
 doing its job.
-
-**Read straightness with care.** Note that `noise` scores *highest*
-(0.985) while producing by far the worst samples. Straightness measures
-how efficiently a path travels, not whether it arrives anywhere useful:
-a model that shoots off in a confident straight line to the wrong place
-scores near 1.0. It is evidence about path geometry, which is what
-rectified flow claims to improve -- never a substitute for looking at
-what came out.
 
 ## Tests
 

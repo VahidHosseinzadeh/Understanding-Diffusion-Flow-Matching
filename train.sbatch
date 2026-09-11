@@ -21,7 +21,7 @@
 #   EPOCHS                                           (default: 30)
 #   BATCH_SIZE                                       (default: 128)
 #   SEED                                             (default: 0)
-#   DIAGNOSTICS  1 to log loss-vs-t, straightness, velocity-norm profile
+#   DIAGNOSTICS  1 to log loss-vs-t, velocity-norm profile
 #                and a solver x budget matrix     (default: off, ~5s/preview)
 #   EXPERIMENT   wandb group tying a set of runs together (default: baseline)
 #   EXTRA        any other train.py flag, passed through verbatim

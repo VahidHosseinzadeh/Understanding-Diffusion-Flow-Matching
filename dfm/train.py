@@ -21,12 +21,7 @@ from pathlib import Path
 import torch
 
 from dataset import TOY_DATASETS, get_image_dataloader, get_toy_dataloader
-from diagnostics import (
-    LossTimeProfile,
-    sampler_budget_matrix,
-    straightness,
-    velocity_norm_profile,
-)
+from diagnostics import LossTimeProfile, sampler_budget_matrix, velocity_norm_profile
 from losses import T_SAMPLERS, interpolant_loss
 from mlp import MLP
 from paths import PATHS
@@ -41,7 +36,8 @@ from viz import (
     save_loss_vs_time,
     save_sampler_matrix,
     save_scatter_2d,
-    save_straightness_hist,
+    save_trajectory_filmstrip,
+    save_trajectory_filmstrip_2d,
     save_velocity_field,
     save_velocity_norm_profile,
 )
@@ -97,14 +93,16 @@ def main():
     p.add_argument("--preview-every-epochs", type=int, default=1)
     # diagnostics
     p.add_argument("--diagnostics", action="store_true",
-                   help="log loss-vs-t, trajectory straightness, velocity-norm "
-                        "profile and a solver x budget matrix at preview cadence")
+                   help="log loss-vs-t, velocity-norm profile and a solver x "
+                        "budget matrix at preview cadence")
     p.add_argument("--loss-bins", type=int, default=20,
                    help="bins for the loss-vs-t profile")
     p.add_argument("--diagnostic-budgets", type=int, nargs="*", default=[10, 20],
                    help="network-call budgets for the sampler matrix")
     p.add_argument("--sde-sigma", type=float, default=0.1,
                    help="diffusion coefficient for the euler_maruyama sampler")
+    p.add_argument("--filmstrip-frames", type=int, default=8,
+                   help="columns in the noise->data filmstrip; 0 disables it")
     p.add_argument("--preview-seed", type=int, default=1234,
                    help="fixed noise for previews so successive grids differ "
                         "only by the model, not by a fresh draw")
@@ -163,13 +161,10 @@ def main():
         model = UNet(base_channels=args.base_channels)
         shape = (64, 1, 28, 28)
 
-    # A fixed batch of real data for the velocity-norm probe, plus a smaller
-    # sample count for trajectory work -- straightness converges fast across
-    # samples, so there is no reason to pay for a full preview batch.
+    # A fixed batch of real data for the velocity-norm probe.
     diag_batch = None
-    diag_shape = (32 if not is_toy else 256, *shape[1:])
     if args.diagnostics:
-        diag_n = diag_shape[0]
+        diag_n = 256 if is_toy else 32
         if is_toy:
             diag_batch = reference[:diag_n].to(device)
         else:
@@ -199,9 +194,14 @@ def main():
         # Same starting noise every preview: otherwise successive grids differ
         # by both the model AND a fresh draw, and you cannot tell improvement
         # from resampling when scrubbing the slider in wandb.
+        # Ask for the trajectory: its last frame IS the finished sample, so
+        # the filmstrip costs nothing beyond the sampling run we already do.
+        want_film = args.filmstrip_frames > 0
         with _fixed_noise(args.preview_seed):
-            samples = sampler(net, path, target, shape, device,
-                              steps=args.preview_steps, progress=False)
+            out = sampler(net, path, target, shape, device,
+                          steps=args.preview_steps, progress=False,
+                          return_trajectory=want_film)
+        samples = out[-1] if want_film else out
 
         samples_png = out_dir / f"samples_epoch{epoch:04d}.png"
         if is_toy:
@@ -212,6 +212,18 @@ def main():
         else:
             save_image_grid(samples, samples_png, nrow=8)
         produced["samples"] = samples_png
+
+        if want_film:
+            film_png = out_dir / f"filmstrip_epoch{epoch:04d}.png"
+            if is_toy:
+                save_trajectory_filmstrip_2d(
+                    out, film_png, n_frames=args.filmstrip_frames,
+                    reference=reference, t_range=target.t_range())
+            else:
+                save_trajectory_filmstrip(
+                    out, film_png, n_frames=args.filmstrip_frames,
+                    t_range=target.t_range())
+            produced["filmstrip"] = film_png
 
         if not args.diagnostics:
             return produced
@@ -229,15 +241,6 @@ def main():
             net, path, target, diag_batch), png)
         produced["velocity_norm_vs_time"] = png
 
-        # -- trajectory straightness -----------------------------------
-        with _fixed_noise(args.preview_seed):
-            traj = sampler(net, path, target, diag_shape, device,
-                           steps=args.preview_steps, progress=False,
-                           return_trajectory=True)
-        png = out_dir / f"straightness_epoch{epoch:04d}.png"
-        save_straightness_hist(straightness(traj), png)
-        produced["straightness"] = png
-
         # -- solver x budget matrix (images only) ----------------------
         if not is_toy and args.diagnostic_budgets:
             grids = sampler_budget_matrix(
@@ -251,16 +254,9 @@ def main():
         return produced
 
     def metrics(net) -> dict:
-        """Scalars and distributions for the tracker's charts."""
-        with _fixed_noise(args.preview_seed):
-            traj = sampler(net, path, target, diag_shape, device,
-                           steps=args.preview_steps, progress=False,
-                           return_trajectory=True)
-        s = straightness(traj)
+        """Scalars for the tracker's charts."""
         _, mean_norms, max_norms = velocity_norm_profile(net, path, target, diag_batch)
         return {
-            "straightness_index": s.mean().item(),
-            "straightness_hist": s,
             "velocity_norm_mean": mean_norms.mean().item(),
             "velocity_norm_max": max_norms.max().item(),
         }

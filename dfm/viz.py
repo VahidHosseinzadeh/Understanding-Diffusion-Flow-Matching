@@ -184,22 +184,6 @@ def save_loss_vs_time(
     plt.close(fig)
 
 
-def save_straightness_hist(values: torch.Tensor, path: str | Path) -> None:
-    """Distribution of per-sample trajectory straightness, in (0, 1]."""
-    p = _prep(path)
-    v = values.detach().cpu().flatten()
-    fig, ax = plt.subplots(figsize=(5, 3.2))
-    ax.hist(v.numpy(), bins=40, range=(0, 1), color="#48a", alpha=0.85)
-    ax.axvline(v.mean().item(), color="#c44", lw=1.6,
-               label=f"mean {v.mean().item():.4f}")
-    ax.set_xlabel("straightness   ||x1-x0|| / path length     (1.0 = perfectly straight)")
-    ax.set_ylabel("samples")
-    ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout()
-    fig.savefig(p, dpi=120)
-    plt.close(fig)
-
-
 def save_velocity_norm_profile(
     times: torch.Tensor,
     mean_norms: torch.Tensor,
@@ -270,6 +254,96 @@ def save_sampler_matrix(
                 ax.set_title(f"{nfe} network calls", fontsize=9)
             if c == 0:
                 ax.set_ylabel(sname, fontsize=9)
+    fig.tight_layout()
+    fig.savefig(p, dpi=120)
+    plt.close(fig)
+
+
+def _frame_indices(n_points: int, n_frames: int) -> list[int]:
+    """Evenly spaced frame indices, always including the first and last."""
+    n_frames = min(n_frames, n_points)
+    return torch.linspace(0, n_points - 1, n_frames).round().long().tolist()
+
+
+def save_trajectory_filmstrip(
+    trajectory: torch.Tensor,
+    path: str | Path,
+    n_frames: int = 8,
+    n_samples: int = 8,
+    t_range: tuple[float, float] = (0.0, 1.0),
+) -> None:
+    """Noise -> data as a filmstrip: one row per sample, time across.
+
+    `trajectory` is the (steps+1, B, C, H, W) stack a sampler returns with
+    return_trajectory=True. Left column is t=0 (pure noise), right column
+    is t=1 (the finished sample), and the columns between show the same
+    sample partway along.
+
+    This is the picture the epoch-slider cannot give you: the slider
+    shows one finished grid per epoch, whereas this shows *within* a
+    single generation, which is where you see whether structure appears
+    early and refines, or stays noise until the very last steps.
+    """
+    from torchvision.utils import make_grid
+
+    p = _prep(path)
+    traj = trajectory.detach().cpu()
+    frames = _frame_indices(traj.shape[0], n_frames)
+    n_samples = min(n_samples, traj.shape[1])
+
+    # Lay out sample-major so make_grid(nrow=len(frames)) gives one row per
+    # sample with time running left to right.
+    tiles = torch.stack([traj[f, s] for s in range(n_samples) for f in frames])
+    grid = make_grid((tiles.clamp(-1, 1) + 1) / 2, nrow=len(frames), padding=2)
+
+    lo, hi = t_range
+    times = [lo + (hi - lo) * f / max(traj.shape[0] - 1, 1) for f in frames]
+
+    fig, ax = plt.subplots(figsize=(1.3 * len(frames), 1.3 * n_samples + 0.5))
+    ax.imshow(grid.permute(1, 2, 0).numpy())
+    ax.set_yticks([])
+    # One tick per column, centred on each tile.
+    tile_w = grid.shape[2] / len(frames)
+    ax.set_xticks([(i + 0.5) * tile_w for i in range(len(frames))])
+    ax.set_xticklabels([f"{v:.2f}" for v in times], fontsize=8)
+    ax.set_xlabel("t        (0 = noise  →  1 = data)")
+    for side in ("top", "right", "left", "bottom"):
+        ax.spines[side].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(p, dpi=120)
+    plt.close(fig)
+
+
+def save_trajectory_filmstrip_2d(
+    trajectory: torch.Tensor,
+    path: str | Path,
+    n_frames: int = 8,
+    reference: torch.Tensor | None = None,
+    lim: float = 3.0,
+    t_range: tuple[float, float] = (0.0, 1.0),
+) -> None:
+    """The same idea for 2D data: a row of scatter panels over time.
+
+    Watching the cloud contract from a Gaussian blob onto the data
+    manifold is the clearest single picture of what the ODE is doing.
+    """
+    p = _prep(path)
+    traj = trajectory.detach().cpu()
+    frames = _frame_indices(traj.shape[0], n_frames)
+    lo, hi = t_range
+
+    fig, axes = plt.subplots(1, len(frames), figsize=(2.0 * len(frames), 2.3))
+    axes = [axes] if len(frames) == 1 else list(axes)
+    for ax, f in zip(axes, frames):
+        if reference is not None:
+            r = reference.detach().cpu()
+            ax.scatter(r[:, 0], r[:, 1], s=2, alpha=0.12, color="#bbb", linewidths=0)
+        pts = traj[f]
+        ax.scatter(pts[:, 0], pts[:, 1], s=3, alpha=0.5, color="#c44", linewidths=0)
+        t_val = lo + (hi - lo) * f / max(traj.shape[0] - 1, 1)
+        ax.set_title(f"t = {t_val:.2f}", fontsize=9)
+        ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim)
+        ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
     fig.tight_layout()
     fig.savefig(p, dpi=120)
     plt.close(fig)

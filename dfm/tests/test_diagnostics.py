@@ -13,41 +13,11 @@ import torch.nn as nn
 from diagnostics import (
     LossTimeProfile,
     sampler_budget_matrix,
-    straightness,
     velocity_norm_profile,
 )
 from paths import LinearPath
 from samplers import NFE_PER_STEP
 from targets import NoiseTarget, VelocityTarget
-
-
-# --------------------------------------------------------------------
-# straightness
-# --------------------------------------------------------------------
-
-def test_straight_line_has_straightness_exactly_one():
-    """Equal steps along one direction: distance covered == path length."""
-    steps = torch.linspace(0, 1, 11).reshape(11, 1, 1).expand(11, 4, 3)
-    assert torch.allclose(straightness(steps.contiguous()), torch.ones(4), atol=1e-6)
-
-
-def test_zigzag_straightness_matches_hand_computation():
-    """0 -> 1 -> 0 -> 1 -> 2 travels 4 units to get 2 units away."""
-    traj = torch.zeros(5, 1, 2)
-    traj[:, 0, 0] = torch.tensor([0.0, 1.0, 0.0, 1.0, 2.0])
-    assert straightness(traj).item() == pytest.approx(0.5, abs=1e-6)
-
-
-def test_straightness_handles_image_shaped_trajectories():
-    traj = torch.randn(9, 6, 1, 8, 8)
-    s = straightness(traj)
-    assert s.shape == (6,)
-    assert ((s > 0) & (s <= 1.0 + 1e-6)).all(), "straightness must lie in (0, 1]"
-
-
-def test_straightness_rejects_a_non_trajectory():
-    with pytest.raises(ValueError):
-        straightness(torch.randn(1, 4, 2))  # only one point: no path
 
 
 # --------------------------------------------------------------------

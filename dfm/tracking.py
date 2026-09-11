@@ -43,9 +43,8 @@ class Tracker(ABC):
         """Log distributions rather than point summaries.
 
         Not abstract: a backend that cannot draw histograms should drop
-        them, not refuse to exist. A mean alone hides the shape that
-        matters here -- e.g. whether low straightness is every sample
-        being mediocre or a few paths looping badly.
+        them, not refuse to exist. A mean alone hides the shape of a
+        distribution, which is often the part that matters.
         """
 
     def finish(self) -> None:
