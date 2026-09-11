@@ -52,12 +52,21 @@ def interpolant_loss(
     target: Target,
     t_sampler: Callable[[int, torch.device], torch.Tensor] = uniform_t,
     weighting: Callable[[torch.Tensor], torch.Tensor] | None = None,
-) -> torch.Tensor:
+    return_per_sample: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """One MSE step of the interpolant objective. Returns a scalar.
 
     The four lines that matter are the four in the middle: draw noise,
     draw a time, interpolate, regress. Everything a specific method adds
     on top of that lives behind `path` and `target`.
+
+    With `return_per_sample=True` also returns the detached per-sample
+    MSE and the t each sample was drawn at, which is what
+    `diagnostics.LossTimeProfile` bins. The per-sample value is the
+    *unweighted* error: the weighting is a statement about which samples
+    should influence the gradient, not about how hard they actually are,
+    and conflating the two would hide exactly the boundary effects the
+    profile exists to find.
     """
 
     # sampling noise and time (note that we have independent coupling of noise and data here)
@@ -74,6 +83,10 @@ def interpolant_loss(
 
     # loss between prediction and the target, optionally weighted by a function of t
     se = (pred - y).pow(2).flatten(1).mean(dim=1)  # per-sample squared error
+    per_sample = se.detach()
     if weighting is not None:
         se = se * weighting(t)
-    return se.mean()
+    loss = se.mean()
+    if return_per_sample:
+        return loss, per_sample, t.detach()
+    return loss

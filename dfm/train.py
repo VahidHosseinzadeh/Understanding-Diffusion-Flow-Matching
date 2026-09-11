@@ -14,12 +14,19 @@ from __future__ import annotations
 
 import argparse
 import os
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
 import torch
 
 from dataset import TOY_DATASETS, get_image_dataloader, get_toy_dataloader
+from diagnostics import (
+    LossTimeProfile,
+    sampler_budget_matrix,
+    straightness,
+    velocity_norm_profile,
+)
 from losses import T_SAMPLERS, interpolant_loss
 from mlp import MLP
 from paths import PATHS
@@ -29,7 +36,35 @@ from tracking import TRACKERS, make_tracker
 from trainer import Trainer, TrainConfig
 from unet import UNet
 from utils import get_device, seed_everything
-from viz import save_image_grid, save_scatter_2d, save_velocity_field
+from viz import (
+    save_image_grid,
+    save_loss_vs_time,
+    save_sampler_matrix,
+    save_scatter_2d,
+    save_straightness_hist,
+    save_velocity_field,
+    save_velocity_norm_profile,
+)
+
+
+@contextmanager
+def _fixed_noise(seed: int):
+    """Run a block with a fixed RNG seed, then put the stream back.
+
+    Previews and diagnostics must start from identical noise every time
+    they run, or successive panels differ by both the model and a new
+    draw. Restoring the state afterwards keeps training's own randomness
+    unaffected by how often you preview.
+    """
+    cpu_state = torch.get_rng_state()
+    cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    try:
+        torch.manual_seed(seed)
+        yield
+    finally:
+        torch.set_rng_state(cpu_state)
+        if cuda_states is not None:
+            torch.cuda.set_rng_state_all(cuda_states)
 
 
 def main():
@@ -60,6 +95,19 @@ def main():
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--preview-steps", type=int, default=50)
     p.add_argument("--preview-every-epochs", type=int, default=1)
+    # diagnostics
+    p.add_argument("--diagnostics", action="store_true",
+                   help="log loss-vs-t, trajectory straightness, velocity-norm "
+                        "profile and a solver x budget matrix at preview cadence")
+    p.add_argument("--loss-bins", type=int, default=20,
+                   help="bins for the loss-vs-t profile")
+    p.add_argument("--diagnostic-budgets", type=int, nargs="*", default=[10, 20],
+                   help="network-call budgets for the sampler matrix")
+    p.add_argument("--sde-sigma", type=float, default=0.1,
+                   help="diffusion coefficient for the euler_maruyama sampler")
+    p.add_argument("--preview-seed", type=int, default=1234,
+                   help="fixed noise for previews so successive grids differ "
+                        "only by the model, not by a fresh draw")
     p.add_argument("--log-every-steps", type=int, default=10, help="tracker cadence")
     p.add_argument("--out-dir", type=str, default=None)
     p.add_argument("--device", type=str, default="auto")
@@ -115,16 +163,45 @@ def main():
         model = UNet(base_channels=args.base_channels)
         shape = (64, 1, 28, 28)
 
-    loss_fn = partial(
+    # A fixed batch of real data for the velocity-norm probe, plus a smaller
+    # sample count for trajectory work -- straightness converges fast across
+    # samples, so there is no reason to pay for a full preview batch.
+    diag_batch = None
+    diag_shape = (32 if not is_toy else 256, *shape[1:])
+    if args.diagnostics:
+        diag_n = diag_shape[0]
+        if is_toy:
+            diag_batch = reference[:diag_n].to(device)
+        else:
+            diag_batch = next(iter(dataloader))[0][:diag_n].to(device)
+
+    base_loss = partial(
         interpolant_loss, path=path, target=target, t_sampler=T_SAMPLERS[args.t_dist]
     )
+    loss_profile = LossTimeProfile(n_bins=args.loss_bins)
+
+    if args.diagnostics:
+        # Bin the per-sample loss by t as a side effect of the step we were
+        # taking anyway -- one scatter-add, no extra forward passes.
+        def loss_fn(model, x):
+            loss, per_sample, t_drawn = base_loss(model, x, return_per_sample=True)
+            loss_profile.update(t_drawn, per_sample)
+            return loss
+    else:
+        loss_fn = base_loss
 
     def preview(net, out_dir: Path, epoch: int) -> dict[str, Path]:
         """Write previews to disk and report them, so a tracker can mirror
         them. Panel names are stable across runs, which is what lets the
         same panel line up side by side when comparing variations."""
-        samples = sampler(net, path, target, shape, device, steps=args.preview_steps, progress=False)
         produced: dict[str, Path] = {}
+
+        # Same starting noise every preview: otherwise successive grids differ
+        # by both the model AND a fresh draw, and you cannot tell improvement
+        # from resampling when scrubbing the slider in wandb.
+        with _fixed_noise(args.preview_seed):
+            samples = sampler(net, path, target, shape, device,
+                              steps=args.preview_steps, progress=False)
 
         samples_png = out_dir / f"samples_epoch{epoch:04d}.png"
         if is_toy:
@@ -135,7 +212,58 @@ def main():
         else:
             save_image_grid(samples, samples_png, nrow=8)
         produced["samples"] = samples_png
+
+        if not args.diagnostics:
+            return produced
+
+        # -- loss vs t -------------------------------------------------
+        if not loss_profile.is_empty():
+            png = out_dir / f"loss_vs_time_epoch{epoch:04d}.png"
+            save_loss_vs_time(*loss_profile.summary(), png)
+            produced["loss_vs_time"] = png
+            loss_profile.reset()  # each panel describes one window, not all of history
+
+        # -- velocity norm vs t ----------------------------------------
+        png = out_dir / f"velocity_norm_epoch{epoch:04d}.png"
+        save_velocity_norm_profile(*velocity_norm_profile(
+            net, path, target, diag_batch), png)
+        produced["velocity_norm_vs_time"] = png
+
+        # -- trajectory straightness -----------------------------------
+        with _fixed_noise(args.preview_seed):
+            traj = sampler(net, path, target, diag_shape, device,
+                           steps=args.preview_steps, progress=False,
+                           return_trajectory=True)
+        png = out_dir / f"straightness_epoch{epoch:04d}.png"
+        save_straightness_hist(straightness(traj), png)
+        produced["straightness"] = png
+
+        # -- solver x budget matrix (images only) ----------------------
+        if not is_toy and args.diagnostic_budgets:
+            grids = sampler_budget_matrix(
+                net, path, target, (16, *shape[1:]), device,
+                budgets=tuple(args.diagnostic_budgets), seed=args.preview_seed,
+            )
+            png = out_dir / f"sampler_matrix_epoch{epoch:04d}.png"
+            save_sampler_matrix(grids, png, nrow=4)
+            produced["sampler_matrix"] = png
+
         return produced
+
+    def metrics(net) -> dict:
+        """Scalars and distributions for the tracker's charts."""
+        with _fixed_noise(args.preview_seed):
+            traj = sampler(net, path, target, diag_shape, device,
+                           steps=args.preview_steps, progress=False,
+                           return_trajectory=True)
+        s = straightness(traj)
+        _, mean_norms, max_norms = velocity_norm_profile(net, path, target, diag_batch)
+        return {
+            "straightness_index": s.mean().item(),
+            "straightness_hist": s,
+            "velocity_norm_mean": mean_norms.mean().item(),
+            "velocity_norm_max": max_norms.max().item(),
+        }
 
     out_dir = args.out_dir or f"runs/{args.data}_{args.path}_{args.target}"
     config = TrainConfig(
@@ -176,7 +304,8 @@ def main():
     )
 
     trainer = Trainer(model, loss_fn, device, config, preview_fn=preview,
-                      meta=meta, tracker=tracker)
+                      meta=meta, tracker=tracker,
+                      metrics_fn=metrics if args.diagnostics else None)
     try:
         trainer.fit(dataloader)
     finally:

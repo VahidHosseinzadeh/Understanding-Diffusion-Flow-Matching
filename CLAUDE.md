@@ -50,7 +50,11 @@ special-casing samplers.
   x_data and noise are implemented; score prediction is sketched there.
   A target that inverts the interpolant must declare its `t_range`.
 - New solver (DDIM, DPM-Solver, RK4) -> new function in `dfm/samplers.py`,
-  registered in `SAMPLERS`.
+  registered in `SAMPLERS`, with its cost in `NFE_PER_STEP` so budget
+  comparisons stay fair.
+- New diagnostic -> `dfm/diagnostics.py` returns plain tensors, `dfm/viz.py`
+  renders them, `train.py` wires them behind `--diagnostics`. Keep the
+  three separable; the trainer must not learn what is being measured.
 - New t-distribution or loss weighting -> `dfm/losses.py`.
 - New architecture -> new file, must satisfy `forward(x, t)`.
 - Conditioning -> extend the model's `forward`, thread the condition

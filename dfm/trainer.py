@@ -47,12 +47,18 @@ class Trainer:
         preview_fn: Callable[[torch.nn.Module, Path, int], dict[str, Path] | None] | None = None,
         meta: dict[str, Any] | None = None,
         tracker: Tracker | None = None,
+        metrics_fn: Callable[[torch.nn.Module], dict[str, Any]] | None = None,
     ):
         self.model = model.to(device)
         self.loss_fn = loss_fn
         self.device = device
         self.config = config
         self.preview_fn = preview_fn
+        # Runs at preview cadence. Returns {name: float | tensor}; floats go
+        # to the scalar charts, tensors become histograms. Keeping it separate
+        # from preview_fn means the trainer still knows nothing about what is
+        # being measured -- it just forwards whatever it is handed.
+        self.metrics_fn = metrics_fn
         # `meta` is written into the checkpoint so sampling can rebuild the
         # exact path/target/model without you re-typing flags. Getting this
         # wrong used to produce silently garbage samples.
@@ -102,6 +108,7 @@ class Trainer:
 
             if stop or (epoch + 1) % cfg.preview_every_epochs == 0:
                 self._preview(epoch + 1)
+                self._metrics()
             self.save(epoch + 1)
 
     def _preview(self, epoch: int) -> None:
@@ -115,6 +122,19 @@ class Trainer:
         produced = self.preview_fn(self.ema.module, self.out_dir, epoch)
         if produced:
             self.tracker.log_images(self.global_step, produced)
+        self.model.train()
+
+    def _metrics(self) -> None:
+        if self.metrics_fn is None:
+            return
+        self.model.eval()
+        values = self.metrics_fn(self.ema.module)
+        scalars = {k: float(v) for k, v in values.items() if isinstance(v, (int, float))}
+        hists = {k: v for k, v in values.items() if torch.is_tensor(v)}
+        if scalars:
+            self.tracker.log_scalars(self.global_step, scalars)
+        if hists:
+            self.tracker.log_histogram(self.global_step, hists)
         self.model.train()
 
     def save(self, epoch: int) -> None:

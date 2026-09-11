@@ -23,7 +23,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
 
 
 class Tracker(ABC):
@@ -35,6 +38,15 @@ class Tracker(ABC):
     @abstractmethod
     def log_images(self, step: int, images: dict[str, str | Path]) -> None:
         """`images` maps a panel name to an already-saved image file."""
+
+    def log_histogram(self, step: int, values: dict[str, "torch.Tensor"]) -> None:
+        """Log distributions rather than point summaries.
+
+        Not abstract: a backend that cannot draw histograms should drop
+        them, not refuse to exist. A mean alone hides the shape that
+        matters here -- e.g. whether low straightness is every sample
+        being mediocre or a few paths looping badly.
+        """
 
     def finish(self) -> None:
         """Flush and close. Safe to call more than once."""
@@ -100,6 +112,13 @@ class WandbTracker(Tracker):
     def log_images(self, step: int, images: dict[str, str | Path]) -> None:
         self._wandb.log(
             {k: self._wandb.Image(str(v)) for k, v in images.items()}, step=step
+        )
+
+    def log_histogram(self, step: int, values: dict[str, "torch.Tensor"]) -> None:
+        self._wandb.log(
+            {k: self._wandb.Histogram(v.detach().cpu().flatten().numpy())
+             for k, v in values.items()},
+            step=step,
         )
 
     def finish(self) -> None:

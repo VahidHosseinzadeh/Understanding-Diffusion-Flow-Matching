@@ -71,6 +71,24 @@ def expand_to(c: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     return c.reshape(-1, *([1] * (x.dim() - 1)))
 
 
+COEFF_EPS = 1e-4
+
+
+def floor_magnitude(c: torch.Tensor, eps: float = COEFF_EPS) -> torch.Tensor:
+    """Keep |c| >= eps for use as a denominator, preserving c's sign.
+
+    alpha(t) and beta(t) each vanish at one endpoint, and anything that
+    inverts the interpolant -- a non-velocity Target, or the score an SDE
+    sampler needs -- divides by one of them. The division is 0/0 there,
+    so flooring returns something finite rather than NaN. Finite is not
+    accurate: near its bad endpoint the quotient amplifies whatever error
+    the network has, which is why callers also keep away via
+    `Target.t_range`. This is the last line of defence, not the plan.
+    """
+    sign = torch.where(c < 0, -1.0, 1.0)
+    return sign * c.abs().clamp(min=eps)
+
+
 class Path(ABC):
     """A Gaussian interpolant between noise (t=0) and data (t=1)."""
 

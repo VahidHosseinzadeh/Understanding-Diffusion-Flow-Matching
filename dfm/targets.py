@@ -29,7 +29,7 @@ from abc import ABC, abstractmethod
 
 import torch
 
-from paths import Path, expand_to
+from paths import Path, expand_to, floor_magnitude
 
 
 class Target(ABC):
@@ -88,8 +88,6 @@ class VelocityTarget(Target):
 # bug in the algebra, and it is half of what EDM's preconditioning
 # exists to fix. VelocityTarget has no such endpoint because it never
 # inverts anything.
-_EPS = 1e-4
-
 # How far a sampler must stay from the endpoint where each parameterisation
 # is singular. These differ because the conditioning does: measured on the
 # 2D moons task, DataTarget is already usable at 1e-2, while NoiseTarget
@@ -99,12 +97,6 @@ _EPS = 1e-4
 # values that worked.
 _DATA_MARGIN = 1e-2
 _NOISE_MARGIN = 5e-2
-
-
-def _floor_magnitude(c: torch.Tensor, eps: float = _EPS) -> torch.Tensor:
-    """Keep |c| >= eps for use as a denominator, preserving c's sign."""
-    sign = torch.where(c < 0, -1.0, 1.0)
-    return sign * c.abs().clamp(min=eps)
 
 
 class DataTarget(Target):
@@ -129,7 +121,7 @@ class DataTarget(Target):
         beta_t = expand_to(path.beta(t), x_t)
         alpha_dot_t = expand_to(path.alpha_dot(t), x_t)
         beta_dot_t = expand_to(path.beta_dot(t), x_t)
-        x_noise = (x_t - alpha_t * pred) / _floor_magnitude(beta_t)
+        x_noise = (x_t - alpha_t * pred) / floor_magnitude(beta_t)
         return alpha_dot_t * pred + beta_dot_t * x_noise
 
     def t_range(self) -> tuple[float, float]:
@@ -162,7 +154,7 @@ class NoiseTarget(Target):
         beta_t = expand_to(path.beta(t), x_t)
         alpha_dot_t = expand_to(path.alpha_dot(t), x_t)
         beta_dot_t = expand_to(path.beta_dot(t), x_t)
-        x_data = (x_t - beta_t * pred) / _floor_magnitude(alpha_t)
+        x_data = (x_t - beta_t * pred) / floor_magnitude(alpha_t)
         return alpha_dot_t * x_data + beta_dot_t * pred
 
     def t_range(self) -> tuple[float, float]:

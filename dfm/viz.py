@@ -150,3 +150,126 @@ def save_trajectories(
     fig.tight_layout()
     fig.savefig(p, dpi=120)
     plt.close(fig)
+
+
+def save_loss_vs_time(
+    centres: torch.Tensor,
+    means: torch.Tensor,
+    counts: torch.Tensor,
+    path: str | Path,
+) -> None:
+    """Per-timestep loss profile. Flat is healthy.
+
+    Empty bins are NaN and matplotlib leaves them as gaps, which is the
+    honest rendering -- a bin nothing landed in is missing data, not zero
+    loss. The count bars underneath show where the t-distribution
+    actually put its samples, so a spike can be read as "hard here"
+    rather than "barely sampled here".
+    """
+    p = _prep(path)
+    fig, (ax, ax_n) = plt.subplots(
+        2, 1, figsize=(6, 4), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
+    )
+    ax.plot(centres, means, marker="o", ms=3, lw=1.4, color="#c44")
+    ax.set_ylabel("mean loss")
+    ax.set_title("loss vs t   (t=0 noise → t=1 data)", fontsize=9)
+    ax.grid(alpha=0.2)
+
+    ax_n.bar(centres, counts, width=0.9 / max(len(centres), 1), color="#aaa")
+    ax_n.set_ylabel("samples")
+    ax_n.set_xlabel("t")
+    ax_n.set_xlim(0, 1)
+    fig.tight_layout()
+    fig.savefig(p, dpi=120)
+    plt.close(fig)
+
+
+def save_straightness_hist(values: torch.Tensor, path: str | Path) -> None:
+    """Distribution of per-sample trajectory straightness, in (0, 1]."""
+    p = _prep(path)
+    v = values.detach().cpu().flatten()
+    fig, ax = plt.subplots(figsize=(5, 3.2))
+    ax.hist(v.numpy(), bins=40, range=(0, 1), color="#48a", alpha=0.85)
+    ax.axvline(v.mean().item(), color="#c44", lw=1.6,
+               label=f"mean {v.mean().item():.4f}")
+    ax.set_xlabel("straightness   ||x1-x0|| / path length     (1.0 = perfectly straight)")
+    ax.set_ylabel("samples")
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(p, dpi=120)
+    plt.close(fig)
+
+
+def save_velocity_norm_profile(
+    times: torch.Tensor,
+    mean_norms: torch.Tensor,
+    max_norms: torch.Tensor,
+    path: str | Path,
+) -> None:
+    """||u(x_t, t)|| across t, log-scaled.
+
+    Log y is not optional here: a boundary explosion spans orders of
+    magnitude, and on a linear axis it flattens everything else into the
+    floor. A velocity-target run should read nearly flat; noise- and
+    x_data-prediction should climb steeply at opposite ends.
+    """
+    p = _prep(path)
+    fig, ax = plt.subplots(figsize=(6, 3.4))
+    ax.plot(times, mean_norms, lw=1.6, color="#48a", label="mean")
+    ax.plot(times, max_norms, lw=1.2, color="#c44", ls="--", label="max")
+    ax.set_yscale("log")
+    ax.set_xlabel("t   (0 = noise, 1 = data)")
+    ax.set_ylabel("||u(x_t, t)||")
+    ax.set_title("velocity norm vs t   (spikes at an end = boundary explosion)", fontsize=9)
+    ax.grid(alpha=0.2, which="both")
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(p, dpi=120)
+    plt.close(fig)
+
+
+def save_sampler_matrix(
+    grids: dict,
+    path: str | Path,
+    nrow: int = 4,
+) -> None:
+    """Solver x budget comparison, one image grid per cell.
+
+    `grids` maps (sampler_name, nfe) -> a batch of images. Columns are
+    equal network-call budgets, so cells in a column cost the same
+    compute; rows are solvers. Reading across a row shows what more
+    compute buys that solver; reading down a column shows which solver
+    spends a fixed budget best.
+    """
+    from torchvision.utils import make_grid
+
+    p = _prep(path)
+    samplers = sorted({k[0] for k in grids})
+    budgets = sorted({k[1] for k in grids})
+
+    # Match the figure's cell aspect to the image grid's, or tight_layout
+    # leaves bands of dead space between rows.
+    any_batch = next(iter(grids.values()))
+    cell_rows = max(1, (any_batch.shape[0] + nrow - 1) // nrow)
+    cell_aspect = cell_rows / nrow  # height / width
+    cell_w = 2.6
+    fig, axes = plt.subplots(
+        len(samplers), len(budgets),
+        figsize=(cell_w * len(budgets), cell_w * cell_aspect * len(samplers) + 0.6),
+        squeeze=False,
+    )
+    for r, sname in enumerate(samplers):
+        for c, nfe in enumerate(budgets):
+            ax = axes[r][c]
+            imgs = grids.get((sname, nfe))
+            if imgs is not None:
+                g = make_grid(((imgs.detach().cpu().clamp(-1, 1) + 1) / 2), nrow=nrow)
+                ax.imshow(g.permute(1, 2, 0).numpy())
+            ax.set_xticks([]); ax.set_yticks([])
+            if r == 0:
+                ax.set_title(f"{nfe} network calls", fontsize=9)
+            if c == 0:
+                ax.set_ylabel(sname, fontsize=9)
+    fig.tight_layout()
+    fig.savefig(p, dpi=120)
+    plt.close(fig)

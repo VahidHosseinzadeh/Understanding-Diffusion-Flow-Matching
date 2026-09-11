@@ -21,6 +21,8 @@
 #   EPOCHS                                           (default: 30)
 #   BATCH_SIZE                                       (default: 128)
 #   SEED                                             (default: 0)
+#   DIAGNOSTICS  1 to log loss-vs-t, straightness, velocity-norm profile
+#                and a solver x budget matrix     (default: off, ~5s/preview)
 #   EXPERIMENT   wandb group tying a set of runs together (default: baseline)
 #   EXTRA        any other train.py flag, passed through verbatim
 #
@@ -32,6 +34,7 @@
 #   TARGET=x_data EPOCHS=50 sbatch train.sbatch
 #   DATA=moons sbatch train.sbatch                   # model auto-switches to mlp
 #   EXTRA="--lr 1e-4 --base-channels 32" sbatch train.sbatch
+#   DIAGNOSTICS=1 TARGET=noise sbatch train.sbatch   # see the boundary blow-up
 #
 #   # the comparison the three-axis split exists for -- one run per target,
 #   # all in one wandb group so their curves overlay:
@@ -68,6 +71,7 @@ EPOCHS="${EPOCHS:-30}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 SEED="${SEED:-0}"
 EXPERIMENT="${EXPERIMENT:-baseline}"
+DIAGNOSTICS="${DIAGNOSTICS:-}"
 EXTRA="${EXTRA:-}"
 
 # --- environment -----------------------------------------------------
@@ -122,6 +126,7 @@ ARGS=(
     --out-dir "runs/$RUN_ID"
 )
 if [ -n "$MODEL" ]; then ARGS+=(--model "$MODEL"); fi
+if [ -n "$DIAGNOSTICS" ]; then ARGS+=(--diagnostics); fi
 
 echo "+ python dfm/train.py ${ARGS[*]} $EXTRA"
 # $EXTRA is deliberately unquoted so it splits into separate flags.

@@ -21,7 +21,7 @@ from typing import Callable
 import torch
 from tqdm import tqdm
 
-from paths import Path
+from paths import Path, expand_to, floor_magnitude
 from targets import Target
 
 
@@ -115,4 +115,70 @@ def heun(
     return torch.stack(traj) if return_trajectory else x
 
 
-SAMPLERS = {"euler": euler, "heun": heun}
+@torch.no_grad()
+def euler_maruyama(
+    model,
+    path: Path,
+    target: Target,
+    shape: tuple[int, ...],
+    device: torch.device,
+    steps: int = 50,
+    progress: bool = True,
+    return_trajectory: bool = False,
+    sigma: float = 0.1,
+) -> torch.Tensor:
+    """Stochastic sampling -- the "SDE extension" of the same model.
+
+    Every ODE above is the probability-flow form of a whole family of
+    SDEs that share its marginals (Song et al. 2021). Adding noise back
+    in, and correcting the drift with the score to compensate:
+
+        dX = [u(X,t) + (sigma^2 / 2) * score(X,t)] dt + sigma dW
+
+    `sigma` here is the SDE diffusion coefficient -- the sigma_t that
+    `paths.py` deliberately reserves the name for. It is a *sampling*
+    knob on an already-trained model: sigma=0 recovers `euler` exactly,
+    and larger values trade determinism for extra stochastic correction,
+    which can clean up a model whose learned field is slightly off.
+
+    The score comes free from the velocity. Inverting the interpolant
+    gives the noise endpoint, and for a Gaussian path
+
+        score = -x_noise / beta(t)
+
+    so this works with any target, not just the ones that predict noise
+    directly. Note the division: score blows up as beta(t) -> 0, hence
+    `floor_magnitude`. One network call per step, same as `euler`.
+    """
+    v = _velocity_fn(model, path, target)
+    x = torch.randn(shape, device=device)
+    t0, t1 = target.t_range()
+    ts = torch.linspace(t0, t1, steps + 1, device=device)
+    traj = [x.clone()] if return_trajectory else None
+
+    it = range(steps)
+    if progress:
+        it = tqdm(it, total=steps, desc="euler-maruyama")
+    for i in it:
+        t_scalar, dt = ts[i].item(), (ts[i + 1] - ts[i]).item()
+        t_vec = torch.full((x.shape[0],), t_scalar, device=device)
+
+        velocity = v(x, t_scalar)
+        _, x_noise = path.solve(x, velocity, t_vec)
+        beta_t = floor_magnitude(expand_to(path.beta(t_vec), x))
+        score = -x_noise / beta_t
+
+        drift = velocity + 0.5 * sigma**2 * score
+        x = x + drift * dt + sigma * (dt ** 0.5) * torch.randn_like(x)
+        if return_trajectory:
+            traj.append(x.clone())
+
+    return torch.stack(traj) if return_trajectory else x
+
+
+SAMPLERS = {"euler": euler, "heun": heun, "euler_maruyama": euler_maruyama}
+
+# Network calls per step, so budgets can be compared fairly. Heun evaluates
+# the field twice per step; comparing solvers at equal *steps* silently
+# hands it double the compute.
+NFE_PER_STEP = {"euler": 1, "heun": 2, "euler_maruyama": 1}

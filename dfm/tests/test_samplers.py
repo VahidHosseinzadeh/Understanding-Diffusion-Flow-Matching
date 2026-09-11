@@ -49,14 +49,51 @@ def test_shape_and_finiteness(name, sampler):
     assert torch.isfinite(out).all()
 
 
-@pytest.mark.parametrize("name,sampler", sorted(SAMPLERS.items()))
+# euler_maruyama is stochastic by construction, so exactness applies only to
+# the deterministic solvers. It gets its own tests below.
+DETERMINISTIC = {k: v for k, v in SAMPLERS.items() if k != "euler_maruyama"}
+
+
+@pytest.mark.parametrize("name,sampler", sorted(DETERMINISTIC.items()))
 def test_constant_field_is_exact(name, sampler):
-    """Both solvers integrate a constant field exactly, at any step count."""
+    """Both deterministic solvers integrate a constant field exactly, at
+    any step count."""
     c = 1.5
     torch.manual_seed(0)
     out = sampler(ConstantField(c), PATH, TARGET, SHAPE, torch.device("cpu"),
                   steps=3, progress=False)
     assert torch.allclose(out, _start_point(SHAPE) + c, atol=1e-5)
+
+
+def test_euler_maruyama_reduces_to_euler_at_zero_noise():
+    """sigma is the only thing separating the SDE from the probability-flow
+    ODE, so sigma=0 must reproduce euler bit for bit. This is the check
+    that the score-correction term is wired up with the right coefficient:
+    a stray factor would survive every other test here."""
+    from samplers import euler_maruyama
+
+    torch.manual_seed(0)
+    ode = euler(ConstantField(), PATH, TARGET, SHAPE, torch.device("cpu"),
+                steps=10, progress=False)
+    torch.manual_seed(0)
+    sde = euler_maruyama(ConstantField(), PATH, TARGET, SHAPE, torch.device("cpu"),
+                         steps=10, progress=False, sigma=0.0)
+    assert torch.allclose(ode, sde, atol=1e-6)
+
+
+def test_euler_maruyama_is_stochastic_but_finite():
+    """sigma > 0 must actually inject noise -- and stay finite doing it,
+    despite the score dividing by beta(t) -> 0 near the data endpoint."""
+    from samplers import euler_maruyama
+
+    torch.manual_seed(0)
+    a = euler_maruyama(ConstantField(), PATH, TARGET, SHAPE, torch.device("cpu"),
+                       steps=10, progress=False, sigma=0.3)
+    torch.manual_seed(0)
+    b = euler_maruyama(ConstantField(), PATH, TARGET, SHAPE, torch.device("cpu"),
+                       steps=10, progress=False, sigma=0.0)
+    assert torch.isfinite(a).all()
+    assert not torch.allclose(a, b, atol=1e-3)
 
 
 def test_heun_is_second_order_where_euler_is_not():
