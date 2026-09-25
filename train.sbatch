@@ -11,6 +11,8 @@
 # Nothing in this file needs editing to change an experiment.
 #
 #   TARGET       velocity | x_data | noise           (default: velocity)
+#   LOSS_SPACE   velocity | x_data | noise   space the error is measured in
+#                                   (default: empty = the TARGET's own)
 #   FM_PATH      linear                              (default: linear)
 #   SAMPLER      euler | heun                        (default: euler)
 #   DATA         fashion_mnist | moons |
@@ -32,6 +34,7 @@
 # EXAMPLES
 #   TARGET=noise sbatch train.sbatch
 #   TARGET=x_data EPOCHS=50 sbatch train.sbatch
+#   TARGET=x_data LOSS_SPACE=velocity sbatch train.sbatch   # JiT: x-pred, v-loss
 #   DATA=moons sbatch train.sbatch                   # model auto-switches to mlp
 #   EXTRA="--lr 1e-4 --base-channels 32" sbatch train.sbatch
 #   DIAGNOSTICS=1 TARGET=noise sbatch train.sbatch   # see the boundary blow-up
@@ -62,6 +65,7 @@ set -euo pipefail
 
 # --- knobs, with defaults --------------------------------------------
 TARGET="${TARGET:-velocity}"
+LOSS_SPACE="${LOSS_SPACE:-}"         # empty = measure in TARGET's own space
 FM_PATH="${FM_PATH:-linear}"
 SAMPLER="${SAMPLER:-euler}"
 DATA="${DATA:-fashion_mnist}"
@@ -108,7 +112,7 @@ PYTHONPATH=dfm python -c "from utils import get_device; print('device:', get_dev
 # --- the run ---------------------------------------------------------
 # Run name and out-dir both carry the varying knobs, so two runs of the
 # same sweep never collide on disk or become indistinguishable in wandb.
-RUN_ID="${DATA}_${FM_PATH}_${TARGET}_s${SEED}_${SLURM_JOB_ID}"
+RUN_ID="${DATA}_${FM_PATH}_${TARGET}${LOSS_SPACE:+_${LOSS_SPACE}-loss}_s${SEED}_${SLURM_JOB_ID}"
 
 ARGS=(
     --data "$DATA"
@@ -126,6 +130,7 @@ ARGS=(
     --out-dir "runs/$RUN_ID"
 )
 if [ -n "$MODEL" ]; then ARGS+=(--model "$MODEL"); fi
+if [ -n "$LOSS_SPACE" ]; then ARGS+=(--loss-space "$LOSS_SPACE"); fi
 if [ -n "$DIAGNOSTICS" ]; then ARGS+=(--diagnostics); fi
 
 echo "+ python dfm/train.py ${ARGS[*]} $EXTRA"

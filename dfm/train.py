@@ -22,7 +22,7 @@ import torch
 
 from dataset import TOY_DATASETS, get_image_dataloader, get_toy_dataloader
 from diagnostics import LossTimeProfile, sampler_budget_matrix, velocity_norm_profile
-from losses import T_SAMPLERS, interpolant_loss
+from losses import T_SAMPLERS, LossSpaceWeighting, interpolant_loss
 from mlp import MLP
 from paths import PATHS
 from samplers import SAMPLERS
@@ -73,6 +73,16 @@ def main():
     # loss knobs
     p.add_argument("--beta-min", type=float, default=0.0)
     p.add_argument("--t-dist", choices=list(T_SAMPLERS), default="uniform")
+    p.add_argument("--loss-space", choices=list(TARGETS), default=None,
+                   help="measure the error in this target's space instead of "
+                        "--target's own, by reweighting. Training only: the "
+                        "network still predicts --target, so sampling is "
+                        "unaffected. --target x_data --loss-space velocity is "
+                        "JiT's x-prediction with a v-loss")
+    p.add_argument("--max-loss-weight", type=float, default=400.0,
+                   help="cap on the --loss-space weight, which diverges where "
+                        "the conversion is singular. 400 = JiT's clip of 1-t "
+                        "at 0.05")
     # data / model
     p.add_argument("--data", choices=list(TOY_DATASETS) + ["fashion_mnist"], default="moons")
     p.add_argument("--model", choices=["mlp", "unet"], default=None,
@@ -170,8 +180,17 @@ def main():
         else:
             diag_batch = next(iter(dataloader))[0][:diag_n].to(device)
 
+    # Measuring the error somewhere other than where the network predicts
+    # is only a per-t weight, so neither the model nor the sampler hears
+    # about it.
+    loss_space = args.loss_space or args.target
+    weighting = (
+        LossSpaceWeighting(TARGETS[loss_space](), max_weight=args.max_loss_weight)
+        if loss_space != args.target else None
+    )
     base_loss = partial(
-        interpolant_loss, path=path, target=target, t_sampler=T_SAMPLERS[args.t_dist]
+        interpolant_loss, path=path, target=target,
+        t_sampler=T_SAMPLERS[args.t_dist], weighting=weighting,
     )
     loss_profile = LossTimeProfile(n_bins=args.loss_bins)
 
@@ -261,7 +280,9 @@ def main():
             "velocity_norm_max": max_norms.max().item(),
         }
 
-    out_dir = args.out_dir or f"runs/{args.data}_{args.path}_{args.target}"
+    # Two runs differing only in loss space must not overwrite each other.
+    loss_tag = "" if weighting is None else f"_{loss_space}-loss"
+    out_dir = args.out_dir or f"runs/{args.data}_{args.path}_{args.target}{loss_tag}"
     config = TrainConfig(
         epochs=args.epochs, lr=lr, out_dir=out_dir, max_steps=args.max_steps,
         preview_every_epochs=args.preview_every_epochs,
@@ -269,12 +290,15 @@ def main():
     )
     meta = {
         "path": args.path, "beta_min": args.beta_min, "target": args.target,
+        "loss_space": loss_space, "max_loss_weight": args.max_loss_weight,
         "model": model_name, "data": args.data, "hidden": args.hidden,
         "depth": args.depth, "base_channels": args.base_channels,
     }
 
     n_params = sum(q.numel() for q in model.parameters())
     print(f"device={device}  {path}  {target}  model={model_name} ({n_params/1e6:.2f}M)")
+    if weighting is not None:
+        print(f"loss measured in {loss_space} space: {weighting}")
     print(f"data={args.data}  lr={lr:g}  threads={threads}  out_dir={out_dir}")
 
     # Every axis goes into the tracker's config, so runs can be grouped and
@@ -286,7 +310,7 @@ def main():
             dict(
                 project=args.wandb_project,
                 entity=args.wandb_entity,
-                name=args.wandb_name or f"{args.data}-{args.path}-{args.target}-s{args.seed}",
+                name=args.wandb_name or f"{args.data}-{args.path}-{args.target}{loss_tag}-s{args.seed}",
                 group=args.wandb_group,
                 tags=args.wandb_tags,
                 out_dir=out_dir,

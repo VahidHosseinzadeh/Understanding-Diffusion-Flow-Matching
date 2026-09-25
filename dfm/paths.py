@@ -51,8 +51,8 @@ TIME CONVENTION
 
 ADDING A PATH
     Subclass `Path` and implement four scalar functions of t. You get
-    `interpolate`, `velocity` and `solve` for free, and every target,
-    sampler and loss in the package works with it unchanged.
+    `interpolate`, `velocity`, `det` and `solve` for free, and every
+    target, sampler and loss in the package works with it unchanged.
 
     Variance-preserving (DDPM) would be, with abar the usual cumulative
     product reparameterised so t=1 is data:
@@ -128,13 +128,27 @@ class Path(ABC):
         beta_dot_t = expand_to(self.beta_dot(t), x_data)
         return alpha_dot_t * x_data + beta_dot_t * x_noise
 
+    def det(self, t: torch.Tensor) -> torch.Tensor:
+        """The determinant of the map (x_data, x_noise) -> (x_t, v):
+
+            det [ alpha   beta  ]  =  alpha * beta' - alpha' * beta
+                [ alpha'  beta' ]
+
+        (the Wronskian of alpha and beta). Every conversion between
+        parameterisations divides by it -- `solve` does, and so does each
+        error-conversion factor in `Target.velocity_error_scale`. It must
+        be nonzero for (x_t, v) to pin down the endpoints at all. For
+        `LinearPath` it is -1 at every t, whatever beta_min is.
+        """
+        return self.alpha(t) * self.beta_dot(t) - self.alpha_dot(t) * self.beta(t)
+
     def solve(self, x_t: torch.Tensor, v: torch.Tensor, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Recover (x_data, x_noise) from a point and its velocity.
 
         x_t and v are two linear equations in the two unknowns:
             x_t = alpha   * x_data + beta   * x_noise
             v   = alpha'  * x_data + beta'  * x_noise
-        with determinant D = alpha * beta' - beta * alpha', giving
+        with determinant D = `det(t)`, giving
             x_data  = ( beta' * x_t - beta * v ) / D
             x_noise = ( alpha * v   - alpha' * x_t ) / D
 
@@ -146,7 +160,7 @@ class Path(ABC):
         beta_t = expand_to(self.beta(t), x_t)
         alpha_dot_t = expand_to(self.alpha_dot(t), x_t)
         beta_dot_t = expand_to(self.beta_dot(t), x_t)
-        det = alpha_t * beta_dot_t - beta_t * alpha_dot_t
+        det = expand_to(self.det(t), x_t)
         x_data = (beta_dot_t * x_t - beta_t * v) / det
         x_noise = (alpha_t * v - alpha_dot_t * x_t) / det
         return x_data, x_noise

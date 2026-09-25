@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from paths import LinearPath
+from paths import LinearPath, expand_to
 from targets import TARGETS, DataTarget, NoiseTarget, VelocityTarget
 
 ALL_TARGETS = [VelocityTarget(), DataTarget(), NoiseTarget()]
@@ -51,6 +51,29 @@ def test_all_targets_agree_with_each_other():
     ]
     for other in velocities[1:]:
         assert torch.allclose(velocities[0], other, atol=1e-4)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS, ids=lambda tg: repr(tg))
+def test_velocity_error_scale_is_the_slope_of_to_velocity(target):
+    """v_theta - v = s(t) * (pred - y) must hold for *any* prediction error.
+
+    This is what lets the loss move between spaces by reweighting alone.
+    A slip in s would still train -- just with silently wrong weights --
+    so it is checked against to_velocity itself, not against a formula.
+    """
+    # beta_min > 0 makes beta' != -1, so a scale that hard-codes plain
+    # rectified flow fails here.
+    path = LinearPath(beta_min=0.01)
+    x_data = torch.randn(32, 3, dtype=torch.float64)
+    x_noise = torch.randn(32, 3, dtype=torch.float64)
+    t = torch.rand(32, dtype=torch.float64) * 0.9 + 0.05  # off the floored endpoints
+    x_t = path.interpolate(x_data, x_noise, t)
+    y = target.regression_target(path, x_data, x_noise, t)
+    err = torch.randn_like(y)
+
+    v_err = target.to_velocity(path, x_t, t, y + err) - path.velocity(x_data, x_noise, t)
+    scale = expand_to(target.velocity_error_scale(path, t), err)
+    assert torch.allclose(v_err, scale * err, atol=1e-10)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS, ids=lambda tg: repr(tg))

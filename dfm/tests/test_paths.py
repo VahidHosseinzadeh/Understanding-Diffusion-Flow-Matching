@@ -67,6 +67,33 @@ def test_solve_round_trips(path):
     assert torch.allclose(rec_noise, x_noise, atol=1e-4)
 
 
+@pytest.mark.parametrize("path", ALL_PATHS)
+def test_det_is_the_determinant_of_the_schedule_matrix(path):
+    """det(t) against torch.linalg.det of [[alpha, beta], [alpha', beta']].
+
+    Both `solve` and every loss-space weight divide by it, so an error
+    here corrupts every conversion between targets at once.
+    """
+    t = torch.rand(16, dtype=torch.float64)
+    matrix = torch.stack([
+        torch.stack([path.alpha(t), path.beta(t)], dim=-1),
+        torch.stack([path.alpha_dot(t), path.beta_dot(t)], dim=-1),
+    ], dim=-2)  # (16, 2, 2)
+    assert torch.allclose(path.det(t), torch.linalg.det(matrix), atol=1e-12)
+
+
+@pytest.mark.parametrize("beta_min", [0.0, 0.01])
+def test_linear_path_det_is_minus_one(beta_min):
+    """t * -(1 - beta_min) - 1 * (1 - (1 - beta_min) t) = -1, for every t.
+
+    So on rectified flow the conversion factors reduce to powers of
+    alpha = t and beta = 1 - t alone -- e.g. 1/(1-t)^2 for x_data
+    measured in velocity.
+    """
+    t = torch.linspace(0, 1, 11)
+    assert torch.allclose(LinearPath(beta_min).det(t), torch.full_like(t, -1.0))
+
+
 def test_linear_path_velocity_is_constant_in_t():
     """Rectified flow's defining property: along one conditional path
     the velocity does not depend on t. This is why it can take big steps."""

@@ -13,15 +13,21 @@ the regression difficulty in different places and weight timesteps
 differently, which is why the choice matters empirically even though
 it is a no-op mathematically.
 
-A Target therefore needs exactly two methods:
+A Target therefore needs exactly three methods:
 
-    regression_target(...)  what to put on the right-hand side of the MSE
-    to_velocity(...)        how the sampler turns a prediction back into
-                            dx/dt, since every sampler here integrates
-                            an ODE in velocity
+    regression_target(...)     what to put on the right-hand side of the MSE
+    to_velocity(...)           how the sampler turns a prediction back into
+                               dx/dt, since every sampler here integrates
+                               an ODE in velocity
+    velocity_error_scale(...)  how much velocity error one unit of error
+                               in this prediction causes
 
 Keeping `to_velocity` on this axis is what lets samplers stay ignorant
 of parameterisation: `samplers.euler` works with any target you add.
+`velocity_error_scale` does the same for the loss: it is what lets the
+error be measured in any target's space while the network predicts
+another (`losses.LossSpaceWeighting`), so every target you add is also
+a loss space, with no change to `losses.py`.
 """
 from __future__ import annotations
 
@@ -44,6 +50,21 @@ class Target(ABC):
         self, path: Path, x_t: torch.Tensor, t: torch.Tensor, pred: torch.Tensor
     ) -> torch.Tensor:
         """Convert a raw network output into dx/dt for the sampler."""
+
+    @abstractmethod
+    def velocity_error_scale(self, path: Path, t: torch.Tensor) -> torch.Tensor:
+        """s(t) such that  v_theta - v = s(t) * (pred - regression_target).
+
+        At fixed (x_t, t), `to_velocity` is affine in the prediction with a
+        scalar slope, so an error in any parameterisation is a rescaled
+        velocity error. That slope is the whole error-conversion table:
+        between any two targets P and S,
+
+            err_S = (s_P / s_S) * err_P
+
+        with velocity as the common currency -- the same role it plays for
+        the samplers. Returns shape (B,), like `Path.alpha`.
+        """
 
     # Not abstract: a target valid on all of [0, 1] need not think about this.
     def t_range(self) -> tuple[float, float]:
@@ -73,6 +94,9 @@ class VelocityTarget(Target):
 
     def to_velocity(self, path, x_t, t, pred):
         return pred
+
+    def velocity_error_scale(self, path, t):
+        return torch.ones_like(t)
 
     def __repr__(self) -> str:
         return "VelocityTarget()"
@@ -124,6 +148,12 @@ class DataTarget(Target):
         x_noise = (x_t - alpha_t * pred) / floor_magnitude(beta_t)
         return alpha_dot_t * pred + beta_dot_t * x_noise
 
+    def velocity_error_scale(self, path, t):
+        # An error e in x_data implies an error -(alpha/beta) e in x_noise, so
+        #   v_theta - v = alpha' e - beta' (alpha/beta) e = -(det/beta) e.
+        # Singular as beta -> 0 at t=1: the same endpoint as to_velocity.
+        return -path.det(t) / floor_magnitude(path.beta(t))
+
     def t_range(self) -> tuple[float, float]:
         return 0.0, 1.0 - _DATA_MARGIN
 
@@ -157,6 +187,12 @@ class NoiseTarget(Target):
         x_data = (x_t - beta_t * pred) / floor_magnitude(alpha_t)
         return alpha_dot_t * x_data + beta_dot_t * pred
 
+    def velocity_error_scale(self, path, t):
+        # An error e in x_noise implies an error -(beta/alpha) e in x_data, so
+        #   v_theta - v = -alpha' (beta/alpha) e + beta' e = (det/alpha) e.
+        # Singular as alpha -> 0 at t=0.
+        return path.det(t) / floor_magnitude(path.alpha(t))
+
     def t_range(self) -> tuple[float, float]:
         return _NOISE_MARGIN, 1.0
 
@@ -173,7 +209,9 @@ class NoiseTarget(Target):
 #   recovers x_noise = -beta(t) * pred and then reuses NoiseTarget's two
 #   lines. Score- and noise-prediction are the same object up to a
 #   t-dependent factor, which is the bridge between score-based models
-#   and DDPM.
+#   and DDPM. Its velocity_error_scale is NoiseTarget's times -beta(t),
+#   i.e. -beta * det / alpha -- and once it is registered,
+#   `--loss-space score` is denoising score matching for free.
 
 
 TARGETS = {

@@ -21,12 +21,9 @@ from pathlib import Path
 
 import torch
 
+from checkpoint import load_checkpoint, sample_shape
 from dataset import TOY_DATASETS
-from mlp import MLP
-from paths import PATHS
 from samplers import SAMPLERS
-from targets import TARGETS
-from unet import UNet
 from utils import get_device, seed_everything
 from viz import save_image_grid, save_scatter_2d, save_trajectories
 
@@ -49,16 +46,7 @@ def main():
     seed_everything(args.seed)
     device = get_device(args.device)
 
-    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    meta = ckpt.get("meta", {})
-    if not meta:
-        raise SystemExit(
-            "checkpoint has no `meta` block -- it predates config-in-checkpoint "
-            "and cannot be reconstructed unambiguously. Retrain it."
-        )
-
-    path = PATHS[meta["path"]](beta_min=meta.get("beta_min", 0.0))
-    target = TARGETS[meta["target"]]()
+    model, path, target, meta, _ = load_checkpoint(args.checkpoint, device, use_ema=not args.no_ema)
     is_toy = meta["data"] in TOY_DATASETS
 
     torch.set_num_threads(
@@ -66,17 +54,8 @@ def main():
         else (1 if meta["model"] == "mlp" else min(8, os.cpu_count() or 1))
     )
 
-    if meta["model"] == "mlp":
-        model = MLP(dim=2, hidden=meta["hidden"], depth=meta["depth"])
-        n = args.n or 2048
-        shape = (n, 2)
-    else:
-        model = UNet(base_channels=meta["base_channels"])
-        n = args.n or 64
-        shape = (n, 1, 28, 28)
-
-    model.load_state_dict(ckpt["model" if args.no_ema else "ema"])
-    model.to(device).eval()
+    n = args.n or (2048 if meta["model"] == "mlp" else 64)
+    shape = (n, *sample_shape(meta))
 
     sampler = SAMPLERS[args.sampler]
     out = Path(args.out or f"{args.sampler}_{args.steps}steps.png")

@@ -45,7 +45,8 @@ dfm/
   targets.py    what the net regresses onto, and how to get dx/dt back
   samplers.py   euler, heun, euler_maruyama (SDE)
   diagnostics.py loss-vs-t, velocity norms, solver budget matrix
-  losses.py     the MSE objective, t-distribution, per-timestep weighting
+  losses.py     the MSE objective, t-distribution, per-timestep weighting,
+                loss space
   embeddings.py sinusoidal time conditioning, shared by both models
   mlp.py        model for 2D toy data
   unet.py       model for images
@@ -54,8 +55,11 @@ dfm/
   viz.py        velocity fields, trajectories, scatters, loss curves
   tracking.py   optional Weights & Biases logging
   utils.py      seeding, device, EMA
+  checkpoint.py rebuilds model, path and target from a checkpoint's meta
+  metrics.py    FID / KID / IS / precision-recall, via torch-fidelity
   train.py      python dfm/train.py --data moons
   sample.py     python dfm/sample.py --checkpoint ... --sampler heun
+  evaluate.py   python dfm/evaluate.py --checkpoint ... --nfe 10 20 50
   tests/        numerical tests, not just shape tests
 train.sbatch    Slurm job for the image runs
 data/           Fashion-MNIST lands here (gitignored)
@@ -155,6 +159,46 @@ python dfm/sample.py --checkpoint ... --sampler heun  --steps 5    # 10 calls
 
 At 100+ steps every solver agrees. The interesting region is 2-20.
 
+## Evaluation
+
+FID and friends for image checkpoints, computed with
+[torch-fidelity](https://github.com/toshas/torch-fidelity) as in JiT --
+the standard TF-compatible Inception-v3 protocol, not a lookalike whose
+numbers compare with nothing:
+
+```bash
+pip install torch-fidelity
+python dfm/evaluate.py --checkpoint runs/<run>/checkpoint.pt
+python dfm/evaluate.py --checkpoint ... --sampler euler heun --nfe 10 20 50
+```
+
+Each (sampler, NFE) cell scores `--n` samples (default 10k) against the
+real training split and prints FID, KID and Inception Score; add `prc`
+to `--metrics` for precision/recall. Each cell writes its own
+`eval_<reference>_n<n>_<sampler>_nfe<nfe>.json` beside the checkpoint
+(suffixed `_raw` or `_s<seed>` for non-default weights or seed),
+carrying every setting that affects the numbers, plus a `.png` grid of
+the samples actually scored. As in the `sampler_matrix` diagnostic,
+budgets count network calls and every cell starts from the same noise.
+
+| metric | what it measures | caveat |
+|---|---|---|
+| FID | distance between Gaussians fitted to Inception features; lower is better | biased by sample count: compare only at equal `--n` (papers use 50k) |
+| KID | the same features, compared by kernel MMD; lower is better | unbiased, so steadier than FID at a few thousand samples |
+| IS | how confidently and variedly Inception labels the samples | ImageNet's classes do not describe Fashion-MNIST: relative signal only |
+| precision / recall | fidelity and coverage, separately | the two failures FID folds into one number; costs a VGG-16 pass |
+
+Run it on a GPU: on an A100 a 10k-sample cell takes about 40 s, while
+on a laptop CPU (torch-fidelity has no MPS path) Inception needed more
+than 15 minutes for 12k images. The first run per split also scores
+every real image -- about 30 s for the 60k training set on the A100 --
+and caches the result in `data/fidelity_cache/` for reuse. Compute nodes without internet need
+the Inception weights fetched once from a login node:
+
+```bash
+python -c "import torch, torch_fidelity.feature_extractor_inceptionv3 as m; torch.hub.load_state_dict_from_url(m.URL_INCEPTION_V3)"
+```
+
 ## Experiment tracking (optional)
 
 Everything above works with no tracker: local PNGs and `losses.json`
@@ -232,6 +276,34 @@ Even with the endpoints trimmed, noise-prediction stays ~10x behind
 velocity here. That is not a bug to fix: it is why flow matching
 prefers velocity, why DDPM's own samplers work directly in eps space
 instead of converting, and what EDM's preconditioning is for.
+
+### Where the loss is measured is a separate choice
+
+`--target` fixes what the network outputs. By default the error is
+measured in that same space, but it need not be: at a fixed `x_t`,
+every target's error is the velocity error times a scalar,
+
+    v_theta - v = s(t) * (pred - target)
+
+with `s = 1` for velocity, `-det/beta` for x_data and `det/alpha` for
+noise (`det = alpha*beta' - alpha'*beta`, which is -1 on the linear
+path). So measuring a prediction's error in another target's space is
+only a per-t weight, `(s_pred / s_space)^2`. The prediction is never
+converted, and the loss code does not change:
+
+```bash
+# x-prediction with a v-loss, the pairing JiT (Li & He 2025) trains
+python dfm/train.py --data fashion_mnist --target x_data --loss-space velocity
+```
+
+On the linear path that weight is `1/(1-t)^2`, which diverges at t=1;
+`--max-loss-weight` (default 400) caps it. JiT's own code converts both
+sides to velocity, dividing by `max(1-t, 0.05)`. That is the same loss:
+`x_t` cancels in the difference, and a test transcribes their code to
+check it. Sampling is untouched, since the network still predicts x_data.
+
+This also makes loss curves comparable across targets: measure all
+three in velocity space and their curves share units (up to the cap).
 
 ## Diagnostics
 

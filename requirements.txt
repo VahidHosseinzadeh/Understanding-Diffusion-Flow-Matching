@@ -20,3 +20,8 @@ pytest
 # local PNGs and losses.json are always written either way.
 #   pip install wandb
 # wandb
+
+# Optional: FID / KID / IS / precision-recall, for dfm/evaluate.py only.
+# Nothing else imports it, and the tests never need it.
+#   pip install torch-fidelity
+# torch-fidelity>=0.4

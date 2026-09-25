@@ -11,7 +11,10 @@ Two knobs live here rather than on the path or target, because they are
 properties of how you *train*, not of the process itself:
 
   - the distribution t is drawn from
-  - the per-timestep weighting w(t)
+  - the per-timestep weighting w(t) -- which also decides *which space*
+    the error is measured in, since moving a loss from one target's
+    space to another's only ever rescales it by a function of t
+    (`LossSpaceWeighting`)
 
 Both matter more than they look. A uniform t spends equal effort on
 every noise level; real runs often do better concentrating on the
@@ -45,13 +48,72 @@ def logit_normal_t(batch: int, device: torch.device, mean: float = 0.0, std: flo
 T_SAMPLERS = {"uniform": uniform_t, "logit_normal": logit_normal_t}
 
 
+# A weighting is handed the path and target the loss is using, not just t:
+# the interesting ones are functions of alpha(t), beta(t) and of what the
+# network predicts. Passing them in, rather than letting a closure capture
+# its own copies, means the weighting and the loss can never disagree.
+Weighting = Callable[[Path, Target, torch.Tensor], torch.Tensor]
+
+
+class LossSpaceWeighting:
+    """Measure the error in `space`, whatever the network predicts.
+
+    What the network outputs and where its error is measured are separate
+    choices. JiT (Li & He 2025, "Back to Basics: Let Denoising Generative
+    Models Denoise") tabulates all nine pairs and trains x_data-prediction
+    with a velocity loss. Moving an error between spaces only rescales it
+    (`Target.velocity_error_scale`), so the loss in space S of a network
+    predicting P is its plain loss times
+
+        w(t) = (s_P(t) / s_S(t))^2
+
+    and the prediction never needs converting. Mind the direction if you
+    check this against a conversion table: its (P, S) entry -- the error
+    in S per unit error in P -- is s_P / s_S, but if the table is instead
+    read as one *denominator* per space (beta for x_data, alpha for noise,
+    det for velocity, so |d| = |det| / |s|), the same weight reads
+    (d_S / d_P)^2. Reciprocal bookkeeping, identical numbers. The part
+    that is not a convention: x_data measured in velocity must blow *up*
+    as t -> 1, where beta -> 0. On `LinearPath`:
+
+        x_data measured in velocity   1/(1-t)^2
+        noise  measured in velocity   1/t^2
+        x_data measured in noise      t^2/(1-t)^2 = SNR(t), the identity
+                                      behind Kingma et al. 2021 (VDM)
+
+    The weight diverges wherever the conversion is singular. Uncapped,
+    x_data-in-velocity has E[w] = infinity under uniform t, and a sample
+    drawn at t = 0.9999 carries 10^8 times the weight of one at t = 0;
+    `max_weight` caps it. JiT's code converts both x_pred and x_data to
+    velocity, dividing each by (1-t).clamp_min(0.05). The x_t terms cancel
+    in the difference, so that loss is exactly this weighting at the
+    default cap, 400 = 1/0.05^2. Capping x_data-in-noise the same way is
+    Min-SNR-gamma (Hang et al. 2023).
+
+    The loss comes out in S's units, so runs measured in the same space
+    have comparable loss curves (up to the cap) even when their targets
+    differ -- plain losses of different targets are not.
+    """
+
+    def __init__(self, space: Target, max_weight: float = 400.0):
+        self.space = space
+        self.max_weight = max_weight
+
+    def __call__(self, path: Path, target: Target, t: torch.Tensor) -> torch.Tensor:
+        ratio = target.velocity_error_scale(path, t) / self.space.velocity_error_scale(path, t)
+        return ratio.pow(2).clamp(max=self.max_weight)
+
+    def __repr__(self) -> str:
+        return f"LossSpaceWeighting(space={self.space!r}, max_weight={self.max_weight:g})"
+
+
 def interpolant_loss(
     model,
     x_data: torch.Tensor,
     path: Path,
     target: Target,
     t_sampler: Callable[[int, torch.device], torch.Tensor] = uniform_t,
-    weighting: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    weighting: Weighting | None = None,
     return_per_sample: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """One MSE step of the interpolant objective. Returns a scalar.
@@ -59,6 +121,10 @@ def interpolant_loss(
     The four lines that matter are the four in the middle: draw noise,
     draw a time, interpolate, regress. Everything a specific method adds
     on top of that lives behind `path` and `target`.
+
+    `weighting(path, target, t)` returns a (B,) per-sample weight.
+    Measuring the error in another target's space is one such weighting
+    (`LossSpaceWeighting`), so it needs no branch here.
 
     With `return_per_sample=True` also returns the detached per-sample
     MSE and the t each sample was drawn at, which is what
@@ -85,7 +151,7 @@ def interpolant_loss(
     se = (pred - y).pow(2).flatten(1).mean(dim=1)  # per-sample squared error
     per_sample = se.detach()
     if weighting is not None:
-        se = se * weighting(t)
+        se = se * weighting(path, target, t)
     loss = se.mean()
     if return_per_sample:
         return loss, per_sample, t.detach()
