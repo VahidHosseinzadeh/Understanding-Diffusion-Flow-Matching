@@ -9,8 +9,8 @@ one trained model, many samplers.
     python dfm/sample.py --checkpoint ... --sampler heun --steps 5
 
 Compare solvers at equal network calls, not equal steps (Heun uses two
-per step):
-    python dfm/sample.py --checkpoint ... --sampler euler --steps 10
+per step, one on its last):
+    python dfm/sample.py --checkpoint ... --sampler euler --steps 9
     python dfm/sample.py --checkpoint ... --sampler heun  --steps 5
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ import torch
 
 from checkpoint import load_checkpoint, sample_shape
 from dataset import TOY_DATASETS
-from samplers import SAMPLERS
+from samplers import SAMPLERS, network_calls
 from utils import get_device, seed_everything
 from viz import save_image_grid, save_scatter_2d, save_trajectories
 
@@ -61,7 +61,7 @@ def main():
     out = Path(args.out or f"{args.sampler}_{args.steps}steps.png")
 
     print(f"{path}  {target}  sampler={args.sampler}  steps={args.steps}  "
-          f"network calls={args.steps * (2 if args.sampler == 'heun' else 1)}")
+          f"network calls={network_calls(args.sampler, args.steps)}")
 
     result = sampler(model, path, target, shape, device, steps=args.steps,
                      return_trajectory=args.trajectories and is_toy)

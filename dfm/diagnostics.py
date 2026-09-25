@@ -23,7 +23,7 @@ from typing import Callable
 import torch
 
 from paths import Path
-from samplers import NFE_PER_STEP, SAMPLERS
+from samplers import SAMPLERS, steps_for_budget
 from targets import Target
 
 
@@ -125,17 +125,17 @@ def sampler_budget_matrix(
 
     Budgets are counted in model evaluations, not steps: Heun calls the
     field twice per step, so 20 NFE means 20 Euler steps but only 10 Heun
-    steps. Comparing at equal steps quietly hands Heun double the compute
-    and is the most common way this comparison gets reported wrongly.
+    steps (19 calls: its last step is plain Euler). Comparing at equal
+    steps quietly hands Heun double the compute and is the most common way
+    this comparison gets reported wrongly.
 
     Every cell starts from the same noise (same seed), so differences are
     the solver's doing and not a different draw.
     """
     out: dict[tuple[str, int], torch.Tensor] = {}
     for name in sampler_names:
-        per_step = NFE_PER_STEP[name]
         for nfe in budgets:
-            steps = max(1, nfe // per_step)
+            steps = steps_for_budget(name, nfe)
             torch.manual_seed(seed)
             out[(name, nfe)] = SAMPLERS[name](
                 model, path, target, shape, device, steps=steps, progress=False

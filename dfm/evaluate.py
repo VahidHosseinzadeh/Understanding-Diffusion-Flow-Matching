@@ -7,8 +7,8 @@
 Like sample.py, the path, target and model come from the checkpoint;
 what you choose is how to decode and how many samples to score. Every
 (sampler, NFE) cell starts from the same seed, and budgets count network
-calls rather than steps (heun spends two per step), so the cells of one
-table are a fair comparison.
+calls rather than steps (heun spends two per step, one on its last), so
+the cells of one table are a fair comparison.
 
 Needs `pip install torch-fidelity`, and a GPU for anything past a smoke
 test. The first run per split also pushes every real image through
@@ -30,7 +30,7 @@ import torch
 from checkpoint import load_checkpoint, sample_shape
 from dataset import DATA_ROOT
 from metrics import METRICS, fashion_mnist_uint8, generate_images, image_metrics
-from samplers import NFE_PER_STEP, SAMPLERS
+from samplers import SAMPLERS, network_calls, steps_for_budget
 from utils import get_device, seed_everything
 from viz import save_image_grid
 
@@ -49,7 +49,7 @@ def main():
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--sampler", nargs="+", choices=list(SAMPLERS), default=["euler"])
     p.add_argument("--nfe", nargs="+", type=int, default=[50],
-                   help="network-call budgets; steps = nfe / calls per step")
+                   help="network-call budgets; each sampler takes as many steps as fit")
     p.add_argument("--n", type=int, default=10_000, help="samples scored per cell")
     p.add_argument("--reference", choices=["train", "test"], default="train",
                    help="the real split to compare against")
@@ -103,8 +103,8 @@ def main():
 
     for name in args.sampler:
         for budget in args.nfe:
-            steps = max(1, budget // NFE_PER_STEP[name])
-            nfe = steps * NFE_PER_STEP[name]
+            steps = steps_for_budget(name, budget)
+            nfe = network_calls(name, steps)  # what was spent, not what was allowed
             # One file per cell, written as soon as the cell is done, and
             # named by every setting a rerun is likely to change: a later
             # run with other settings never overwrites it, and a crash an

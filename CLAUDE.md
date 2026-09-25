@@ -52,8 +52,10 @@ special-casing samplers.
   x_data and noise are implemented; score prediction is sketched there.
   A target that inverts the interpolant must declare its `t_range`.
 - New solver (DDIM, DPM-Solver, RK4) -> new function in `dfm/samplers.py`,
-  registered in `SAMPLERS`, with its cost in `NFE_PER_STEP` so budget
-  comparisons stay fair.
+  registered in `SAMPLERS`, with its cost in `NFE_PER_STEP` (and
+  `NFE_LAST_STEP` if its final step differs) so budget comparisons stay
+  fair. Convert between steps and calls only via `network_calls` /
+  `steps_for_budget`, never `steps * 2`.
 - New diagnostic -> `dfm/diagnostics.py` returns plain tensors, `dfm/viz.py`
   renders them, `train.py` wires them behind `--diagnostics`. Keep the
   three separable; the trainer must not learn what is being measured.

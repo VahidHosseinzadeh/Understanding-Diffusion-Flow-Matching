@@ -251,7 +251,7 @@ def save_sampler_matrix(
                 ax.imshow(g.permute(1, 2, 0).numpy())
             ax.set_xticks([]); ax.set_yticks([])
             if r == 0:
-                ax.set_title(f"{nfe} network calls", fontsize=9)
+                ax.set_title(f"≤ {nfe} network calls", fontsize=9)
             if c == 0:
                 ax.set_ylabel(sname, fontsize=9)
     fig.tight_layout()

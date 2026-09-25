@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 from paths import LinearPath
-from samplers import SAMPLERS, euler, heun
+from samplers import SAMPLERS, euler, heun, network_calls, steps_for_budget
 from targets import VelocityTarget
 
 PATH, TARGET = LinearPath(), VelocityTarget()
@@ -96,15 +96,18 @@ def test_euler_maruyama_is_stochastic_but_finite():
     assert not torch.allclose(a, b, atol=1e-3)
 
 
-def test_heun_is_second_order_where_euler_is_not():
+@pytest.mark.parametrize("steps", [4, 8])
+def test_heun_is_second_order_where_euler_is_first(steps):
     """On v(x,t)=t the exact displacement is 1/2.
 
-    Heun's trapezoid rule is exact for a field linear in t; Euler is not,
-    and undershoots by exactly 1/(2n). This is the whole reason the
-    sampler is a separate axis -- swapping it changes the answer on a
-    fixed model.
+    Heun's trapezoid steps are exact for a field linear in t, and only its
+    last step is plain Euler (see `heun`), so it undershoots by exactly
+    dt^2/2 -- second order. Euler undershoots by dt/2 -- first order.
+    Doubling the steps cuts Heun's error 4x and Euler's only 2x. This is
+    the whole reason the sampler is a separate axis: swapping it changes
+    the answer on a fixed model.
     """
-    steps = 4
+    dt = 1 / steps
     start = _start_point(SHAPE)
 
     torch.manual_seed(0)
@@ -114,9 +117,54 @@ def test_heun_is_second_order_where_euler_is_not():
     h = heun(TimeRampField(), PATH, TARGET, SHAPE, torch.device("cpu"),
              steps=steps, progress=False)
 
-    assert torch.allclose(h, start + 0.5, atol=1e-5)                       # exact
-    assert torch.allclose(e, start + (steps - 1) / (2 * steps), atol=1e-5)  # 3/8, not 1/2
-    assert (h - (start + 0.5)).abs().max() < (e - (start + 0.5)).abs().max()
+    assert torch.allclose(h, start + 0.5 - dt**2 / 2, atol=1e-5)
+    assert torch.allclose(e, start + 0.5 - dt / 2, atol=1e-5)
+
+
+def test_heun_never_evaluates_the_network_at_the_data_endpoint():
+    """A correction on the step onto t=1 would query the network where the
+    learned field is least reliable, and averaging that in left visible
+    noise in real samples. EDM skips it; so must we."""
+    seen: list[float] = []
+
+    class Recorder(nn.Module):
+        def forward(self, x, t):
+            seen.append(t[0].item())
+            return torch.zeros_like(x)
+
+    heun(Recorder(), PATH, TARGET, SHAPE, torch.device("cpu"), steps=5, progress=False)
+    assert TARGET.t_range()[1] == 1.0, "test needs a grid that ends on the data endpoint"
+    assert max(seen) < 1.0
+
+
+class CallCounter(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def forward(self, x, t):
+        self.calls += 1
+        return torch.zeros_like(x)
+
+
+@pytest.mark.parametrize("name", sorted(SAMPLERS))
+@pytest.mark.parametrize("steps", [1, 2, 7])
+def test_network_calls_match_what_the_sampler_really_does(name, steps):
+    """Every equal-budget comparison is built on this count, so it is
+    checked against the sampler itself rather than trusted."""
+    counter = CallCounter()
+    SAMPLERS[name](counter, PATH, TARGET, SHAPE, torch.device("cpu"), steps=steps, progress=False)
+    assert counter.calls == network_calls(name, steps)
+
+
+@pytest.mark.parametrize("name", sorted(SAMPLERS))
+def test_steps_for_budget_fits_as_many_steps_as_the_budget_allows(name):
+    """Never over budget, and one more step would be: a solver given a
+    budget uses all of it that its step size can."""
+    for budget in range(1, 30):
+        steps = steps_for_budget(name, budget)
+        assert network_calls(name, steps) <= budget
+        assert network_calls(name, steps + 1) > budget
 
 
 def test_trajectory_shape():

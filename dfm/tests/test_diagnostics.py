@@ -101,7 +101,8 @@ def test_budget_matrix_equalises_network_calls_not_steps():
     """Heun evaluates the field twice per step, so at a 20-call budget it
     must take 10 steps while euler takes 20. Comparing at equal steps
     quietly gives heun double the compute -- the usual way this
-    comparison is reported wrongly."""
+    comparison is reported wrongly. (Heun's last step is plain Euler, so
+    its 10 steps cost 19 calls: 2N - 1 cannot hit an even budget.)"""
     calls: dict[str, int] = {}
 
     class Counter(nn.Module):
@@ -120,8 +121,8 @@ def test_budget_matrix_equalises_network_calls_not_steps():
         )
 
     for name, n in calls.items():
-        assert n == 20, f"{name} used {n} network calls, expected 20"
-        assert NFE_PER_STEP[name] in (1, 2)
+        # Within budget, and no room left for another step.
+        assert 20 - NFE_PER_STEP[name] < n <= 20, f"{name} used {n} network calls for a budget of 20"
 
 
 def test_budget_matrix_covers_every_cell():

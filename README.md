@@ -150,11 +150,11 @@ should be close to straight -- that is the property the method is named
 for, and seeing how straight they actually are is the point.
 
 Compare solvers at equal *network calls*, not equal steps (Heun uses
-two per step):
+two per step, one on its last):
 
 ```bash
-python dfm/sample.py --checkpoint ... --sampler euler --steps 10   # 10 calls
-python dfm/sample.py --checkpoint ... --sampler heun  --steps 5    # 10 calls
+python dfm/sample.py --checkpoint ... --sampler euler --steps 9    # 9 calls
+python dfm/sample.py --checkpoint ... --sampler heun  --steps 5    # 9 calls
 ```
 
 At 100+ steps every solver agrees. The interesting region is 2-20.
@@ -264,6 +264,11 @@ sample to the nearest real data point (lower is better):
 | `velocity` | 0.046 | 0.045 |
 | `x_data` | 0.104 | 0.106 |
 | `noise` | 0.491 | 0.473 |
+
+The heun column predates heun's last step becoming plain Euler (see
+`samplers.heun`): its correction onto t=1 queried the network where the
+learned field is least reliable, which on Fashion-MNIST cost FID 36.7
+against Euler's 10.2 at 20 network calls.
 
 Before each target declared a `t_range` to keep samplers off its
 singular endpoint, the same numbers were **3039** for `noise` + euler
