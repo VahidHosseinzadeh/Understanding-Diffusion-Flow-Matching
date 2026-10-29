@@ -80,7 +80,7 @@ on a cluster that is whatever environment already has them:
 ```bash
 module load python/3.11      # if your cluster needs it
 source activate torch2.2     # or whatever your env is called
-pytest -q                    # 26 tests, ~2s
+pytest -q                    # ~2s
 ```
 
 Locally, if you have no torch yet:
@@ -159,6 +159,47 @@ python dfm/sample.py --checkpoint ... --sampler heun  --steps 5    # 9 calls
 
 At 100+ steps every solver agrees. The interesting region is 2-20.
 
+## Class conditioning and classifier-free guidance
+
+Train with the label, dropped with probability 0.1 (`--label-dropout`),
+so one network learns both the class-conditional fields and the
+unconditional one:
+
+```bash
+python dfm/train.py --data fashion_mnist --class-cond
+CLASS_COND=1 sbatch train.sbatch            # on the cluster
+```
+
+Then sample with guidance weight w (Ho & Salimans 2022):
+
+```bash
+python dfm/sample.py --checkpoint runs/<run>/checkpoint.pt --cfg-scale 3
+python dfm/sample.py --checkpoint ... --cfg-scale 3 --label 7      # sneakers only
+python dfm/sample.py --checkpoint ... --cfg-scale 3 --guidance-interval 0.2 1
+```
+
+The guided prediction is `(1 - w) * uncond + w * cond`: w = 1 is plain
+conditional sampling, w = 0 is the same network's unconditional field,
+and w > 1 pushes away from the unconditional prediction. The grid has
+one class per column. `--guidance-interval LO HI` guides only while
+LO <= t <= HI (Kynkäänniemi et al. 2024; t = 0 is noise here) and is
+plainly conditional elsewhere.
+
+This works with every target and every sampler unchanged. The
+conditioning goes into the network, not the method: the label
+embedding is added to the time embedding, so a denoiser learns
+E[x_data | x_t, y] and a noise predictor E[noise | x_t, y]. Guidance
+mixes the network's two outputs before any conversion to velocity.
+That is exact because every target converts to velocity affinely and
+the two weights sum to one (checked for every target in
+`test_guidance.py`), so `guidance.ClassifierFreeGuidance` simply wraps
+the network.
+
+Guidance doubles the work per step: the conditional and unconditional
+predictions come from one call on a doubled batch. Each run prints the
+`network passes` it spent beside the `network calls`, and an interval
+saves the passes outside it.
+
 ## Evaluation
 
 FID and friends for image checkpoints, computed with
@@ -173,7 +214,9 @@ python dfm/evaluate.py --checkpoint ... --sampler euler heun --nfe 10 20 50
 ```
 
 Each (sampler, NFE) cell scores `--n` samples (default 10k) against the
-real training split and prints FID, KID and Inception Score; add `prc`
+real training split and prints FID, KID and Inception Score. For a
+class-conditional checkpoint, every class gets the same number of samples,
+and `--cfg-scale 0 1 2 3` sweeps the guidance weight, one cell each. Add `prc`
 to `--metrics` for precision/recall. Each cell writes its own
 `eval_<reference>_n<n>_<sampler>_nfe<nfe>.json` beside the checkpoint
 (suffixed `_raw` or `_s<seed>` for non-default weights or seed),
@@ -350,7 +393,7 @@ doing its job.
 ## Tests
 
 ```bash
-pytest -q     # ~1s, no dataset download
+pytest -q     # ~2s, no dataset download
 ```
 
 These check numerics, not just shapes -- `velocity()` is verified

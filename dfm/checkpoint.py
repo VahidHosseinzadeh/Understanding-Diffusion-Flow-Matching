@@ -44,7 +44,9 @@ def load_checkpoint(checkpoint: str, device: torch.device, use_ema: bool = True)
     if meta["model"] == "mlp":
         model = MLP(dim=2, hidden=meta["hidden"], depth=meta["depth"])
     else:
-        model = UNet(base_channels=meta["base_channels"])
+        # num_classes is absent from checkpoints older than conditioning;
+        # those are unconditional, which None reproduces exactly.
+        model = UNet(base_channels=meta["base_channels"], num_classes=meta.get("num_classes"))
     model.load_state_dict(ckpt["ema" if use_ema else "model"])
 
     return Loaded(

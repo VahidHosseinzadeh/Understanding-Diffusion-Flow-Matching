@@ -7,6 +7,9 @@ Start in 2D, where you can see the whole velocity field:
 Then images:
     python dfm/train.py --data fashion_mnist --model unet --epochs 20
 
+Class-conditional, for classifier-free guidance (sample with --cfg-scale):
+    python dfm/train.py --data fashion_mnist --class-cond
+
 Smoke test (seconds):
     python dfm/train.py --data moons --max-steps 50 --epochs 1
 """
@@ -20,8 +23,9 @@ from pathlib import Path
 
 import torch
 
-from dataset import TOY_DATASETS, get_image_dataloader, get_toy_dataloader
+from dataset import FASHION_MNIST_CLASSES, TOY_DATASETS, get_image_dataloader, get_toy_dataloader
 from diagnostics import LossTimeProfile, sampler_budget_matrix, velocity_norm_profile
+from guidance import ClassifierFreeGuidance, balanced_labels
 from losses import T_SAMPLERS, LossSpaceWeighting, interpolant_loss
 from mlp import MLP
 from paths import PATHS
@@ -90,6 +94,14 @@ def main():
     p.add_argument("--hidden", type=int, default=256)
     p.add_argument("--depth", type=int, default=4)
     p.add_argument("--base-channels", type=int, default=64)
+    p.add_argument("--class-cond", action="store_true",
+                   help="condition on the class label, dropping it with probability "
+                        "--label-dropout, so one network learns the conditional and "
+                        "unconditional fields classifier-free guidance combines. "
+                        "Images only. Previews are plain conditional, one class per column")
+    p.add_argument("--label-dropout", type=float, default=0.1,
+                   help="probability of training a sample as unlabelled (eta); "
+                        "only with --class-cond")
     # training
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--batch-size", type=int, default=256)
@@ -139,6 +151,9 @@ def main():
     device = get_device(args.device)
     is_toy = args.data in TOY_DATASETS
     model_name = args.model or ("mlp" if is_toy else "unet")
+    if args.class_cond and is_toy:
+        raise SystemExit("--class-cond needs labelled data; the 2D toys have none")
+    num_classes = len(FASHION_MNIST_CLASSES) if args.class_cond else None
 
     # A 2D MLP does dozens of microsecond-sized ops per step. Synchronising
     # one OpenMP thread per core across those costs far more than the work
@@ -168,8 +183,9 @@ def main():
             batch_size=args.batch_size, subset=args.subset, num_workers=args.num_workers
         )
         reference = None
-        model = UNet(base_channels=args.base_channels)
-        shape = (64, 1, 28, 28)
+        model = UNet(base_channels=args.base_channels, num_classes=num_classes)
+        # Ten per class when conditional: with nrow=10, one class per column.
+        shape = (10 * num_classes if num_classes else 64, 1, 28, 28)
 
     # A fixed batch of real data for the velocity-norm probe.
     diag_batch = None
@@ -191,18 +207,28 @@ def main():
     base_loss = partial(
         interpolant_loss, path=path, target=target,
         t_sampler=T_SAMPLERS[args.t_dist], weighting=weighting,
+        label_dropout=args.label_dropout,
     )
     loss_profile = LossTimeProfile(n_bins=args.loss_bins)
+
+    def unpack(batch):
+        """The loader's batch -> (images, labels or None). The trainer hands
+        it over whole; only here is it known which part is which."""
+        x = batch[0] if isinstance(batch, (list, tuple)) else batch
+        return x, (batch[1] if num_classes else None)
 
     if args.diagnostics:
         # Bin the per-sample loss by t as a side effect of the step we were
         # taking anyway -- one scatter-add, no extra forward passes.
-        def loss_fn(model, x):
-            loss, per_sample, t_drawn = base_loss(model, x, return_per_sample=True)
+        def loss_fn(model, batch):
+            x, labels = unpack(batch)
+            loss, per_sample, t_drawn = base_loss(model, x, labels=labels, return_per_sample=True)
             loss_profile.update(t_drawn, per_sample)
             return loss
     else:
-        loss_fn = base_loss
+        def loss_fn(model, batch):
+            x, labels = unpack(batch)
+            return base_loss(model, x, labels=labels)
 
     def preview(net, out_dir: Path, epoch: int) -> dict[str, Path]:
         """Write previews to disk and report them, so a tracker can mirror
@@ -216,8 +242,12 @@ def main():
         # Ask for the trajectory: its last frame IS the finished sample, so
         # the filmstrip costs nothing beyond the sampling run we already do.
         want_film = args.filmstrip_frames > 0
+        # A conditional model previews plain conditional samples (w = 1):
+        # what it has learned per class, before any guidance.
+        decode = (ClassifierFreeGuidance(net, balanced_labels(shape[0], num_classes).to(device), 1.0)
+                  if num_classes else net)
         with _fixed_noise(args.preview_seed):
-            out = sampler(net, path, target, shape, device,
+            out = sampler(decode, path, target, shape, device,
                           steps=args.preview_steps, progress=False,
                           return_trajectory=want_film)
         samples = out[-1] if want_film else out
@@ -229,7 +259,7 @@ def main():
             save_velocity_field(net, path, target, field_png, device, reference=reference)
             produced["velocity_field"] = field_png
         else:
-            save_image_grid(samples, samples_png, nrow=8)
+            save_image_grid(samples, samples_png, nrow=num_classes or 8)
         produced["samples"] = samples_png
 
         if want_film:
@@ -281,7 +311,7 @@ def main():
         }
 
     # Two runs differing only in loss space must not overwrite each other.
-    loss_tag = "" if weighting is None else f"_{loss_space}-loss"
+    loss_tag = ("" if weighting is None else f"_{loss_space}-loss") + ("_cond" if num_classes else "")
     out_dir = args.out_dir or f"runs/{args.data}_{args.path}_{args.target}{loss_tag}"
     config = TrainConfig(
         epochs=args.epochs, lr=lr, out_dir=out_dir, max_steps=args.max_steps,
@@ -293,12 +323,16 @@ def main():
         "loss_space": loss_space, "max_loss_weight": args.max_loss_weight,
         "model": model_name, "data": args.data, "hidden": args.hidden,
         "depth": args.depth, "base_channels": args.base_channels,
+        "num_classes": num_classes,
+        "label_dropout": args.label_dropout if num_classes else None,
     }
 
     n_params = sum(q.numel() for q in model.parameters())
     print(f"device={device}  {path}  {target}  model={model_name} ({n_params/1e6:.2f}M)")
     if weighting is not None:
         print(f"loss measured in {loss_space} space: {weighting}")
+    if num_classes:
+        print(f"class-conditional: {num_classes} classes, label dropout {args.label_dropout:g}")
     print(f"data={args.data}  lr={lr:g}  threads={threads}  out_dir={out_dir}")
 
     # Every axis goes into the tracker's config, so runs can be grouped and

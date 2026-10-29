@@ -42,6 +42,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from dataset import get_fashion_mnist
+from guidance import ClassifierFreeGuidance
 from paths import Path
 from targets import Target
 
@@ -96,6 +97,9 @@ def generate_images(
     batch_size: int = 500,
     seed: int = 0,
     progress: bool = True,
+    labels: torch.Tensor | None = None,
+    guidance_scale: float = 1.0,
+    guidance_interval: tuple[float, float] = (0.0, 1.0),
 ) -> torch.Tensor:
     """Draw `n` samples in batches; returns uint8 (n, 3, H, W) on the CPU.
 
@@ -103,12 +107,19 @@ def generate_images(
     decode exactly the same starting noise at every step count: the gap
     between two settings is then the solver's doing, not a new draw.
     Quantised batch by batch, which also keeps 50k samples small.
+
+    With `labels` (n,), sample i is drawn for labels[i] with classifier-free
+    guidance at `guidance_scale`; 1.0 is plain conditional sampling.
     """
     torch.manual_seed(seed)
     batches = []
     for start in tqdm(range(0, n, batch_size), desc="generating", disable=not progress):
         shape = (min(batch_size, n - start), *sample_shape)
-        x = sampler(model, path, target, shape, device, steps=steps, progress=False)
+        net = model
+        if labels is not None:
+            net = ClassifierFreeGuidance(model, labels[start:start + shape[0]].to(device),
+                                         guidance_scale, guidance_interval)
+        x = sampler(net, path, target, shape, device, steps=steps, progress=False)
         batches.append(to_uint8_rgb(x).cpu())
     return torch.cat(batches)
 

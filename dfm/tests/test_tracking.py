@@ -37,7 +37,10 @@ class RecordingTracker(Tracker):
 
 def _tiny_setup(tmp_path: Path, tracker=None, **cfg):
     model = MLP(dim=2, hidden=16, depth=2)
-    loss_fn = partial(interpolant_loss, path=LinearPath(), target=VelocityTarget())
+    base = partial(interpolant_loss, path=LinearPath(), target=VelocityTarget())
+
+    def loss_fn(model, batch):
+        return base(model, batch[0])  # the trainer hands over the whole batch
     config = TrainConfig(epochs=1, out_dir=str(tmp_path), **cfg)
     data = torch.utils.data.TensorDataset(torch.randn(64, 2))
     loader = torch.utils.data.DataLoader(data, batch_size=8)

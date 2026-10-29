@@ -23,6 +23,9 @@
 #   EPOCHS                                           (default: 30)
 #   BATCH_SIZE                                       (default: 128)
 #   SEED                                             (default: 0)
+#   CLASS_COND   1 to train class-conditional with label dropout, for
+#                classifier-free guidance (images only; default: off).
+#                Dropout rate: EXTRA="--label-dropout 0.2" (default 0.1)
 #   DIAGNOSTICS  1 to log loss-vs-t, velocity-norm profile
 #                and a solver x budget matrix     (default: off, ~5s/preview)
 #   EXPERIMENT   wandb group tying a set of runs together (default: baseline)
@@ -38,6 +41,7 @@
 #   DATA=moons sbatch train.sbatch                   # model auto-switches to mlp
 #   EXTRA="--lr 1e-4 --base-channels 32" sbatch train.sbatch
 #   DIAGNOSTICS=1 TARGET=noise sbatch train.sbatch   # see the boundary blow-up
+#   CLASS_COND=1 sbatch train.sbatch                 # then sample with --cfg-scale
 #
 #   # the comparison the three-axis split exists for -- one run per target,
 #   # all in one wandb group so their curves overlay:
@@ -76,6 +80,7 @@ BATCH_SIZE="${BATCH_SIZE:-128}"
 SEED="${SEED:-0}"
 EXPERIMENT="${EXPERIMENT:-baseline}"
 DIAGNOSTICS="${DIAGNOSTICS:-}"
+CLASS_COND="${CLASS_COND:-}"
 EXTRA="${EXTRA:-}"
 
 # --- environment -----------------------------------------------------
@@ -112,7 +117,7 @@ PYTHONPATH=dfm python -c "from utils import get_device; print('device:', get_dev
 # --- the run ---------------------------------------------------------
 # Run name and out-dir both carry the varying knobs, so two runs of the
 # same sweep never collide on disk or become indistinguishable in wandb.
-RUN_ID="${DATA}_${FM_PATH}_${TARGET}${LOSS_SPACE:+_${LOSS_SPACE}-loss}_s${SEED}_${SLURM_JOB_ID}"
+RUN_ID="${DATA}_${FM_PATH}_${TARGET}${LOSS_SPACE:+_${LOSS_SPACE}-loss}${CLASS_COND:+_cond}_s${SEED}_${SLURM_JOB_ID}"
 
 ARGS=(
     --data "$DATA"
@@ -132,6 +137,7 @@ ARGS=(
 if [ -n "$MODEL" ]; then ARGS+=(--model "$MODEL"); fi
 if [ -n "$LOSS_SPACE" ]; then ARGS+=(--loss-space "$LOSS_SPACE"); fi
 if [ -n "$DIAGNOSTICS" ]; then ARGS+=(--diagnostics); fi
+if [ -n "$CLASS_COND" ]; then ARGS+=(--class-cond); fi
 
 echo "+ python dfm/train.py ${ARGS[*]} $EXTRA"
 # $EXTRA is deliberately unquoted so it splits into separate flags.

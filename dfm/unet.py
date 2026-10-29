@@ -1,13 +1,17 @@
 """A UNet for image data (Fashion-MNIST at 28x28).
 
-Interface contract: `UNet.forward(x, t)` where
+Interface contract: `UNet.forward(x, t, y=None)` where
   x: (B, C, H, W) float tensor, the interpolated input x_t
   t: (B,) float tensor in [0, 1]
+  y: (B,) long tensor of class labels, NULL_LABEL for "no label";
+     only for a model built with `num_classes`
 
-Identical contract to `mlp.MLP`, so the model is an independent
-choice alongside path/target/sampler -- swapping it never touches the
-process code. Time conditioning is shared with the MLP via
-`embeddings.py`.
+`forward(x, t)` is the same contract as `mlp.MLP`, so the model is an
+independent choice alongside path/target/sampler -- swapping it never
+touches the process code. Time conditioning is shared with the MLP via
+`embeddings.py`. A class-conditional model called without labels gives
+the unconditional prediction, so samplers and diagnostics need no
+changes to use one.
 
 Kept small and readable (no attention above the lowest resolution) so
 it trains at a reasonable pace on CPU/MPS. Bump `base_channels` or
@@ -21,11 +25,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from embeddings import TimeEmbedding
+from embeddings import NULL_LABEL, LabelEmbedding, TimeEmbedding
 
 
 class ResBlock(nn.Module):
-    """GroupNorm -> SiLU -> Conv, with the time embedding injected as a
+    """GroupNorm -> SiLU -> Conv, with the conditioning vector (time
+    embedding, plus the label embedding if there is one) injected as a
     per-channel bias (FiLM-lite) after the first conv."""
 
     def __init__(self, in_ch: int, out_ch: int, time_dim: int, groups: int = 8):
@@ -37,9 +42,11 @@ class ResBlock(nn.Module):
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
         self.skip = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
 
-    def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
         h = self.conv1(F.silu(self.norm1(x)))
-        h = h + self.time_proj(F.silu(t_emb))[:, :, None, None]
+        # `time_proj` keeps its name although it now projects time + label:
+        # renaming it would make every existing checkpoint unloadable.
+        h = h + self.time_proj(F.silu(cond))[:, :, None, None]
         h = self.conv2(F.silu(self.norm2(h)))
         return h + self.skip(x)
 
@@ -94,10 +101,15 @@ class UNet(nn.Module):
         channel_mults: tuple[int, ...] = (1, 2, 2),
         num_res_blocks: int = 2,
         use_attention_at_lowest_res: bool = True,
+        num_classes: int | None = None,
     ):
         super().__init__()
         time_dim = base_channels * 4
         self.time_mlp = TimeEmbedding(base_channels, time_dim)
+        # Added to the time embedding, as in ADM (Dhariwal & Nichol 2021),
+        # so no block changes. None leaves the state dict exactly as an
+        # unconditional model's, and old checkpoints load unchanged.
+        self.label_emb = LabelEmbedding(num_classes, time_dim) if num_classes else None
 
         self.in_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
@@ -145,15 +157,21 @@ class UNet(nn.Module):
         self._channel_mults = channel_mults
         self._num_res_blocks = num_res_blocks
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        t_emb = self.time_mlp(t)
+    def forward(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor | None = None) -> torch.Tensor:
+        cond = self.time_mlp(t)
+        if self.label_emb is not None:
+            if y is None:
+                y = torch.full((x.shape[0],), NULL_LABEL, dtype=torch.long, device=x.device)
+            cond = cond + self.label_emb(y)
+        elif y is not None:
+            raise ValueError("labels given to a UNet built without num_classes")
         h = self.in_conv(x)
         skips = [h]
 
         idx = 0
         for i, mult in enumerate(self._channel_mults):
             for _ in range(self._num_res_blocks):
-                h = self.down_blocks[idx](h, t_emb)
+                h = self.down_blocks[idx](h, cond)
                 idx += 1
                 skips.append(h)
             down = self.downsamples[i]
@@ -161,16 +179,16 @@ class UNet(nn.Module):
                 h = down(h)
                 skips.append(h)
 
-        h = self.mid_block1(h, t_emb)
+        h = self.mid_block1(h, cond)
         h = self.mid_attn(h)
-        h = self.mid_block2(h, t_emb)
+        h = self.mid_block2(h, cond)
 
         idx = 0
         for up_idx, (i, mult) in enumerate(reversed(list(enumerate(self._channel_mults)))):
             for _ in range(self._num_res_blocks + 1):
                 skip = skips.pop()
                 h = torch.cat([h, skip], dim=1)
-                h = self.up_blocks[idx](h, t_emb)
+                h = self.up_blocks[idx](h, cond)
                 idx += 1
             # NOTE: self.upsamples was built by *appending* during this same
             # reversed loop at construction time, so it must be indexed

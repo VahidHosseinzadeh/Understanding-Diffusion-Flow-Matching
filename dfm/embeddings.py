@@ -1,10 +1,15 @@
-"""Time conditioning, shared by every model in this package.
+"""Conditioning, shared by every model in this package: time, and labels.
 
 Both models take t as a float tensor in [0, 1] -- never a raw integer
 timestep. Discrete-time methods normalise before calling the model, so
 the network never has to know how many steps a schedule was defined
 with, and a model trained under one discretisation can be sampled under
 another.
+
+A class label enters through the same door as time: its embedding is
+added to the time embedding, and every block conditions on the sum.
+Nothing here knows what the network predicts, so conditioning works the
+same for every target.
 """
 from __future__ import annotations
 
@@ -50,3 +55,31 @@ class TimeEmbedding(nn.Module):
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
         return self.net(sinusoidal_embedding(t, self.dim))
+
+
+# "No label". Classifier-free guidance needs the unconditional field from
+# the same network as the conditional ones, so "no label" is one more
+# input value rather than a different model (Ho & Salimans 2022).
+NULL_LABEL = -1
+
+
+class LabelEmbedding(nn.Module):
+    """One learned vector per class, plus one for NULL_LABEL.
+
+    Starts at zero, so an untrained network ignores the label and learns
+    how much it matters. Zero rows are not stuck together: each row's
+    gradient comes only from the samples carrying that label.
+    """
+
+    def __init__(self, num_classes: int, dim: int):
+        super().__init__()
+        self.num_classes = num_classes
+        self.table = nn.Embedding(num_classes + 1, dim)  # last row is NULL_LABEL
+        nn.init.zeros_(self.table.weight)
+
+    def forward(self, y: torch.Tensor) -> torch.Tensor:
+        # Checked here because nothing downstream does: on MPS an
+        # out-of-range row is read as garbage memory, not an error.
+        if ((y < 0) & (y != NULL_LABEL)).any() or (y >= self.num_classes).any():
+            raise ValueError(f"labels must be in [0, {self.num_classes}) or NULL_LABEL")
+        return self.table(torch.where(y == NULL_LABEL, self.num_classes, y))

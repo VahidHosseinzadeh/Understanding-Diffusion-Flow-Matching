@@ -26,6 +26,7 @@ from typing import Callable
 
 import torch
 
+from embeddings import NULL_LABEL
 from paths import Path
 from targets import Target
 
@@ -107,6 +108,22 @@ class LossSpaceWeighting:
         return f"LossSpaceWeighting(space={self.space!r}, max_weight={self.max_weight:g})"
 
 
+def drop_labels(labels: torch.Tensor, p: float) -> torch.Tensor:
+    """Replace each label by NULL_LABEL with probability p, independently.
+
+    This is what lets one network learn both fields classifier-free
+    guidance combines (Ho & Salimans 2022). The drop is independent of
+    the image and its label, so the dropped samples are a random sample
+    of the data, and on them the loss is exactly the unconditional one:
+    the network's output at NULL_LABEL converges to the unconditional
+    prediction, not to some average of the class-conditional ones.
+    """
+    if p <= 0.0:
+        return labels
+    drop = torch.rand(labels.shape, device=labels.device) < p
+    return torch.where(drop, torch.full_like(labels, NULL_LABEL), labels)
+
+
 def interpolant_loss(
     model,
     x_data: torch.Tensor,
@@ -115,6 +132,8 @@ def interpolant_loss(
     t_sampler: Callable[[int, torch.device], torch.Tensor] = uniform_t,
     weighting: Weighting | None = None,
     return_per_sample: bool = False,
+    labels: torch.Tensor | None = None,
+    label_dropout: float = 0.0,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """One MSE step of the interpolant objective. Returns a scalar.
 
@@ -125,6 +144,11 @@ def interpolant_loss(
     `weighting(path, target, t)` returns a (B,) per-sample weight.
     Measuring the error in another target's space is one such weighting
     (`LossSpaceWeighting`), so it needs no branch here.
+
+    With `labels`, the model is called as `model(x_t, t, labels)`, after
+    `drop_labels` with probability `label_dropout`: class-conditional
+    training for classifier-free guidance. Without them it is called as
+    `model(x_t, t)`, so unconditional models never see a third argument.
 
     With `return_per_sample=True` also returns the detached per-sample
     MSE and the t each sample was drawn at, which is what
@@ -145,7 +169,10 @@ def interpolant_loss(
     # also definig the target our model wants to learn (can be velocity, score, noise, x_data, etc.)
     x_t = path.interpolate(x_data, x_noise, t)
     y = target.regression_target(path, x_data, x_noise, t)
-    pred = model(x_t, t)
+    if labels is None:
+        pred = model(x_t, t)
+    else:
+        pred = model(x_t, t, drop_labels(labels, label_dropout))
 
     # loss between prediction and the target, optionally weighted by a function of t
     se = (pred - y).pow(2).flatten(1).mean(dim=1)  # per-sample squared error

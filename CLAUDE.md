@@ -33,10 +33,13 @@ Contracts:
 - Samplers are **functions** `(model, path, target, shape, device, ...)`,
   never methods on a process, so any checkpoint can be decoded any way.
 - Models implement `forward(x, t) -> same-shape tensor`, with `t` a
-  float tensor in `[0, 1]` -- never a raw integer timestep.
+  float tensor in `[0, 1]` -- never a raw integer timestep. A
+  class-conditional model adds `y=None`; called without it, it returns
+  the unconditional prediction (`NULL_LABEL`).
 - `Trainer` takes `loss_fn(model, batch)` and an optional
-  `preview_fn(model, out_dir, epoch)`. It must stay ignorant of both
-  the method and the data modality (no hardcoded image shapes).
+  `preview_fn(model, out_dir, epoch)`, and hands `loss_fn` the batch
+  exactly as the loader yields it. It must stay ignorant of both the
+  method and the data modality (no hardcoded image shapes, no unpacking).
 
 ## Time convention
 
@@ -71,9 +74,13 @@ special-casing samplers.
 - Loading a checkpoint -> `checkpoint.load_checkpoint`, the one place
   that rebuilds model, path and target from `meta`.
 - New architecture -> new file, must satisfy `forward(x, t)`.
-- Conditioning -> extend the model's `forward`, thread the condition
-  through `interpolant_loss` and the samplers; keep the unconditional
-  path working via a `None` default.
+- Conditioning -> an embedding added to the time embedding
+  (`embeddings.LabelEmbedding`), the label threaded through
+  `interpolant_loss(labels=...)`; keep the unconditional path working via
+  a `None` default. Never thread it through a sampler: anything done at
+  sampling time with labels is a wrapper with the `forward(x, t)`
+  contract, like `guidance.ClassifierFreeGuidance`. Its cost is in
+  network passes (`guidance.network_passes`), on top of `network_calls`.
 
 ## Environment
 
@@ -83,7 +90,7 @@ special-casing samplers.
   Do not add `__init__.py`; it would break every import.
 - Same setup on macOS and the cluster; see README. No platform-specific
   torch index needed.
-- Tests: `pytest -q` -- ~1s, no dataset download. These check numerics
+- Tests: `pytest -q` -- ~2s, no dataset download. These check numerics
   (finite-difference derivatives, solver exactness on closed-form
   fields), not just shapes. Run after any change to `dfm/paths.py`,
   `dfm/targets.py`, `dfm/samplers.py`, or `dfm/losses.py`.

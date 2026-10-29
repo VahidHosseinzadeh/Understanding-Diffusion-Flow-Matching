@@ -5,6 +5,11 @@ target, t-distribution and weighting produced that closure is the
 caller's business. Adding a method later therefore never touches this
 file -- which is the test of whether the axis split is real.
 
+`batch` is exactly what the loader yields, moved to the device: which
+parts are images and which are labels is the loss's business too. (An
+earlier version kept only `batch[0]` here, which quietly threw away the
+labels conditional training needs.)
+
 Previews are injected the same way, via `preview_fn`, so the trainer is
 not tied to images. That matters: the old version hardcoded a
 (B, 1, 28, 28) sample shape, which quietly made 2D toy data impossible.
@@ -41,7 +46,7 @@ class Trainer:
     def __init__(
         self,
         model: torch.nn.Module,
-        loss_fn: Callable[[torch.nn.Module, torch.Tensor], torch.Tensor],
+        loss_fn: Callable[[torch.nn.Module, Any], torch.Tensor],
         device: torch.device,
         config: TrainConfig,
         preview_fn: Callable[[torch.nn.Module, Path, int], dict[str, Path] | None] | None = None,
@@ -82,9 +87,12 @@ class Trainer:
                 break
             pbar = tqdm(dataloader, desc=f"epoch {epoch+1}/{cfg.epochs}")
             for batch in pbar:
-                x = (batch[0] if isinstance(batch, (list, tuple)) else batch).to(self.device)
+                if isinstance(batch, (list, tuple)):
+                    batch = [b.to(self.device) for b in batch]
+                else:
+                    batch = batch.to(self.device)
 
-                loss = self.loss_fn(self.model, x)
+                loss = self.loss_fn(self.model, batch)
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
                 if cfg.grad_clip is not None:
