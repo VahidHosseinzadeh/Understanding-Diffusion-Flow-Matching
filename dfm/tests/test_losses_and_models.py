@@ -1,10 +1,11 @@
-"""Tests for the loss and the two models."""
+"""Tests for the loss and the models."""
 from __future__ import annotations
 
 import pytest
 import torch
 import torch.nn as nn
 
+from jit import JiT
 from losses import T_SAMPLERS, LossSpaceWeighting, interpolant_loss, logit_normal_t, uniform_t
 from mlp import MLP
 from paths import LinearPath, expand_to
@@ -194,6 +195,7 @@ def test_logit_normal_concentrates_away_from_endpoints():
     [
         (MLP(dim=2, hidden=32, depth=2), (8, 2)),
         (UNet(base_channels=8, channel_mults=(1, 2), num_res_blocks=1), (4, 1, 28, 28)),
+        (JiT(patch_size=7, width=32, depth=2, heads=2), (4, 1, 28, 28)),
     ],
 )
 def test_models_honour_the_forward_contract(model, shape):

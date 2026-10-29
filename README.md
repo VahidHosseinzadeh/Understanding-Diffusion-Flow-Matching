@@ -47,15 +47,17 @@ dfm/
   diagnostics.py loss-vs-t, velocity norms, solver budget matrix
   losses.py     the MSE objective, t-distribution, per-timestep weighting,
                 loss space
-  embeddings.py sinusoidal time conditioning, shared by both models
+  embeddings.py time and label embeddings, shared by every model
   mlp.py        model for 2D toy data
   unet.py       model for images
+  jit.py        Transformer on pixel patches for images (JiT)
   dataset.py    moons / eight_gaussians / spiral, and Fashion-MNIST
   trainer.py    training loop; knows nothing about flow matching
   viz.py        velocity fields, trajectories, scatters, loss curves
   tracking.py   optional Weights & Biases logging
   utils.py      seeding, device, EMA
   checkpoint.py rebuilds model, path and target from a checkpoint's meta
+  convert.py    foreign weights -> a checkpoint of ours (Li & He's JiT)
   metrics.py    FID / KID / IS / precision-recall, via torch-fidelity
   train.py      python dfm/train.py --data moons
   sample.py     python dfm/sample.py --checkpoint ... --sampler heun
@@ -199,6 +201,81 @@ Guidance doubles the work per step: the conditional and unconditional
 predictions come from one call on a doubled batch. Each run prints the
 `network passes` it spent beside the `network calls`, and an interval
 saves the passes outside it.
+
+## A Transformer instead of the UNet (JiT)
+
+`--model jit` replaces the UNet with JiT (Li & He 2025, "Back to Basics:
+Let Denoising Generative Models Denoise"). It cuts the image into p x p
+patches, makes each patch one token, runs a plain Transformer whose
+blocks are conditioned by adaLN-Zero (DiT, Peebles & Xie 2023), and
+projects each token back to its patch. Path, target, sampler and
+guidance are untouched: the model keeps `forward(x, t, y=None)`.
+
+```bash
+# JiT's recipe: x-prediction, velocity loss, logit-normal t, label tokens
+python dfm/train.py --data fashion_mnist --model jit --class-cond --in-context-tokens 8 \
+    --target x_data --loss-space velocity --t-dist logit_normal --t-mean -0.8 --t-std 0.8
+python dfm/sample.py --checkpoint runs/<run>/checkpoint.pt --sampler heun --steps 50 \
+    --cfg-scale 3 --guidance-interval 0.1 1
+```
+
+The defaults are 4x4 patches (49 tokens of 16 numbers), width 256
+(`--hidden`), 6 blocks (`--depth`) and 4 heads: 7.4M parameters, against
+the UNet's 6.1M. `--t-mean -0.8` is JiT's value for 256x256 ImageNet,
+where more noise helped; 28x28 images may want less, and the default is 0.
+The training loop is this repo's (AdamW, EMA 0.999, no warmup), at
+DiT's learning rate for batch 256, 1e-4.
+
+JiT predicts x_data because a 16x16x3 ImageNet patch is 768 numbers, as
+many as JiT-B has per token. Noise and velocity both contain the noise
+sample, so predicting them means carrying all 768 numbers through every
+block. A clean patch needs far fewer. At 4x4 a token is 16 numbers
+against 256 channels, which is the regime where JiT found every target
+works. To bring the bottleneck back, make the patches wider than the
+tokens, then compare `--target x_data --loss-space velocity` against
+`--target velocity`:
+
+```bash
+python dfm/train.py --data fashion_mnist --model jit --patch-size 14 --hidden 128 ...
+```
+
+This gives 4 tokens of 196 numbers at width 128. `--bottleneck-dim 32` instead
+embeds each patch through 32 numbers on purpose, which JiT found
+harmless for x-prediction.
+
+### Li & He's pretrained weights
+
+`jit.JIT_PRESETS` rebuilds the paper's six ImageNet models exactly. B, L
+and H are ViT's Base, Large and Huge sizes; /16 and /32 are the patch
+size. `convert.py` turns their released weights into an ordinary checkpoint
+of ours. After that, sample.py and every sampler use them unchanged:
+
+```bash
+# official release (one folder per model on the authors' Dropbox; B/16 is 1.5 GB:
+# raw weights plus two EMAs), or the single-weight mirror BiliSakura/JiT-diffusers
+python dfm/convert.py jit-official checkpoint-last.pth --preset JiT-B/16 --out jit_b16.pt
+python dfm/convert.py jit-diffusers diffusion_pytorch_model.safetensors \
+    --preset JiT-B/16 --out jit_b16.pt                   # needs: pip install safetensors
+
+# their sampler settings for B/16: Heun 50 steps, guidance 3 for t in [0.1, 1]
+python dfm/sample.py --checkpoint jit_b16.pt --sampler heun --steps 50 \
+    --cfg-scale 3 --guidance-interval 0.1 1 --label 207 360 387 974 88 979 417 279 --n 32 \
+    --tracker wandb --wandb-group pretrained-jit
+```
+
+Two settings differ from our small default, and the presets set both:
+
+- `time_scale=1`: their t enters the time embedding unscaled.
+- `norm_gain=True`: their RMSNorms keep a learned gain before adaLN.
+
+The converter checks names, shapes and the fixed position codes rather
+than trusting them. `tests/test_convert.py` checks the layouts against
+the operations the reference code runs.
+
+Weights from another JiT implementation need one more list of regex
+renames in `convert.RENAMES` and a reader. The /32 models are not
+supported yet: they were trained with noise of standard deviation 2,
+which no Path here provides.
 
 ## Evaluation
 
@@ -413,3 +490,6 @@ otherwise train a subtly wrong field and still make plausible pictures.
    not interchangeable in practice" below.
 4. Add a variance-preserving `Path` -- that is DDPM, and it should
    require no change to the loss, the trainer, or any sampler.
+5. Swap the UNet for a Transformer (`--model jit`) and see which
+   targets survive large patches -- see "A Transformer instead of the
+   UNet (JiT)".

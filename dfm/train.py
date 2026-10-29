@@ -10,6 +10,11 @@ Then images:
 Class-conditional, for classifier-free guidance (sample with --cfg-scale):
     python dfm/train.py --data fashion_mnist --class-cond
 
+A Transformer on pixel patches instead of the UNet, with JiT's recipe
+(x_data prediction, velocity loss, logit-normal t):
+    python dfm/train.py --data fashion_mnist --model jit --class-cond \\
+        --target x_data --loss-space velocity --t-dist logit_normal
+
 Smoke test (seconds):
     python dfm/train.py --data moons --max-steps 50 --epochs 1
 """
@@ -26,7 +31,8 @@ import torch
 from dataset import FASHION_MNIST_CLASSES, TOY_DATASETS, get_image_dataloader, get_toy_dataloader
 from diagnostics import LossTimeProfile, sampler_budget_matrix, velocity_norm_profile
 from guidance import ClassifierFreeGuidance, balanced_labels
-from losses import T_SAMPLERS, LossSpaceWeighting, interpolant_loss
+from jit import JiT
+from losses import T_SAMPLERS, LossSpaceWeighting, interpolant_loss, logit_normal_t
 from mlp import MLP
 from paths import PATHS
 from samplers import SAMPLERS
@@ -77,6 +83,12 @@ def main():
     # loss knobs
     p.add_argument("--beta-min", type=float, default=0.0)
     p.add_argument("--t-dist", choices=list(T_SAMPLERS), default="uniform")
+    p.add_argument("--t-mean", type=float, default=0.0,
+                   help="logit_normal only: mean of logit(t). Negative means more "
+                        "noise, since t = 0 is noise. JiT uses -0.8, tuned on "
+                        "256x256 ImageNet")
+    p.add_argument("--t-std", type=float, default=1.0,
+                   help="logit_normal only: std of logit(t). JiT uses 0.8")
     p.add_argument("--loss-space", choices=list(TARGETS), default=None,
                    help="measure the error in this target's space instead of "
                         "--target's own, by reweighting. Training only: the "
@@ -89,11 +101,23 @@ def main():
                         "at 0.05")
     # data / model
     p.add_argument("--data", choices=list(TOY_DATASETS) + ["fashion_mnist"], default="moons")
-    p.add_argument("--model", choices=["mlp", "unet"], default=None,
-                   help="default: mlp for 2D data, unet for images")
-    p.add_argument("--hidden", type=int, default=256)
-    p.add_argument("--depth", type=int, default=4)
+    p.add_argument("--model", choices=["mlp", "unet", "jit"], default=None,
+                   help="default: mlp for 2D data, unet for images. jit is a "
+                        "Transformer on pixel patches (Li & He 2025), images only")
+    p.add_argument("--hidden", type=int, default=256,
+                   help="MLP hidden width; JiT token width")
+    p.add_argument("--depth", type=int, default=None,
+                   help="MLP blocks (default 4); JiT Transformer blocks (default 6)")
     p.add_argument("--base-channels", type=int, default=64)
+    p.add_argument("--patch-size", type=int, default=4,
+                   help="JiT only: p x p pixels per token; must divide 28")
+    p.add_argument("--heads", type=int, default=4, help="JiT only: attention heads")
+    p.add_argument("--bottleneck-dim", type=int, default=None,
+                   help="JiT only: embed each patch through a linear layer this "
+                        "narrow (JiT: 128 for 768-number patches). Default: none")
+    p.add_argument("--in-context-tokens", type=int, default=0,
+                   help="JiT with --class-cond only: copies of the label embedding "
+                        "added to the token sequence (JiT: 32 next to 256 patches)")
     p.add_argument("--class-cond", action="store_true",
                    help="condition on the class label, dropping it with probability "
                         "--label-dropout, so one network learns the conditional and "
@@ -151,9 +175,15 @@ def main():
     device = get_device(args.device)
     is_toy = args.data in TOY_DATASETS
     model_name = args.model or ("mlp" if is_toy else "unet")
+    # Otherwise the run trains one architecture and records another in its
+    # checkpoint, which then cannot be loaded.
+    if (model_name == "mlp") != is_toy:
+        raise SystemExit(f"--model {model_name} does not fit --data {args.data}: "
+                         "the MLP is for the 2D toys, the UNet and JiT for images")
     if args.class_cond and is_toy:
         raise SystemExit("--class-cond needs labelled data; the 2D toys have none")
     num_classes = len(FASHION_MNIST_CLASSES) if args.class_cond else None
+    depth = args.depth if args.depth is not None else (6 if model_name == "jit" else 4)
 
     # A 2D MLP does dozens of microsecond-sized ops per step. Synchronising
     # one OpenMP thread per core across those costs far more than the work
@@ -166,8 +196,9 @@ def main():
     torch.set_num_threads(threads)
 
     # The MLP on 2D data tolerates a much larger step than a 6M-param UNet
-    # on images; one default cannot serve both.
-    lr = args.lr if args.lr is not None else (2e-3 if model_name == "mlp" else 2e-4)
+    # on images; one default cannot serve both. JiT gets 1e-4, what DiT
+    # trained with at this batch size (256).
+    lr = args.lr if args.lr is not None else {"mlp": 2e-3, "unet": 2e-4, "jit": 1e-4}[model_name]
 
     path = PATHS[args.path](beta_min=args.beta_min)
     target = TARGETS[args.target]()
@@ -176,14 +207,19 @@ def main():
     if is_toy:
         dataloader = get_toy_dataloader(args.data, n=args.n_train, batch_size=args.batch_size)
         reference = dataloader.dataset.tensors[0]
-        model = MLP(dim=2, hidden=args.hidden, depth=args.depth)
+        model = MLP(dim=2, hidden=args.hidden, depth=depth)
         shape = (2048, 2)
     else:
         dataloader = get_image_dataloader(
             batch_size=args.batch_size, subset=args.subset, num_workers=args.num_workers
         )
         reference = None
-        model = UNet(base_channels=args.base_channels, num_classes=num_classes)
+        if model_name == "jit":
+            model = JiT(patch_size=args.patch_size, width=args.hidden, depth=depth,
+                        heads=args.heads, bottleneck_dim=args.bottleneck_dim,
+                        in_context_tokens=args.in_context_tokens, num_classes=num_classes)
+        else:
+            model = UNet(base_channels=args.base_channels, num_classes=num_classes)
         # Ten per class when conditional: with nrow=10, one class per column.
         shape = (10 * num_classes if num_classes else 64, 1, 28, 28)
 
@@ -204,9 +240,11 @@ def main():
         LossSpaceWeighting(TARGETS[loss_space](), max_weight=args.max_loss_weight)
         if loss_space != args.target else None
     )
+    t_sampler = (partial(logit_normal_t, mean=args.t_mean, std=args.t_std)
+                 if args.t_dist == "logit_normal" else T_SAMPLERS[args.t_dist])
     base_loss = partial(
         interpolant_loss, path=path, target=target,
-        t_sampler=T_SAMPLERS[args.t_dist], weighting=weighting,
+        t_sampler=t_sampler, weighting=weighting,
         label_dropout=args.label_dropout,
     )
     loss_profile = LossTimeProfile(n_bins=args.loss_bins)
@@ -310,9 +348,11 @@ def main():
             "velocity_norm_max": max_norms.max().item(),
         }
 
-    # Two runs differing only in loss space must not overwrite each other.
+    # Two runs differing only in loss space, or only in architecture, must
+    # not overwrite each other.
     loss_tag = ("" if weighting is None else f"_{loss_space}-loss") + ("_cond" if num_classes else "")
-    out_dir = args.out_dir or f"runs/{args.data}_{args.path}_{args.target}{loss_tag}"
+    data_tag = args.data + ("_jit" if model_name == "jit" else "")
+    out_dir = args.out_dir or f"runs/{data_tag}_{args.path}_{args.target}{loss_tag}"
     config = TrainConfig(
         epochs=args.epochs, lr=lr, out_dir=out_dir, max_steps=args.max_steps,
         preview_every_epochs=args.preview_every_epochs,
@@ -322,10 +362,12 @@ def main():
         "path": args.path, "beta_min": args.beta_min, "target": args.target,
         "loss_space": loss_space, "max_loss_weight": args.max_loss_weight,
         "model": model_name, "data": args.data, "hidden": args.hidden,
-        "depth": args.depth, "base_channels": args.base_channels,
+        "depth": depth, "base_channels": args.base_channels,
         "num_classes": num_classes,
         "label_dropout": args.label_dropout if num_classes else None,
     }
+    if model_name == "jit":
+        meta["jit"] = model.config()
 
     n_params = sum(q.numel() for q in model.parameters())
     print(f"device={device}  {path}  {target}  model={model_name} ({n_params/1e6:.2f}M)")
@@ -344,12 +386,13 @@ def main():
             dict(
                 project=args.wandb_project,
                 entity=args.wandb_entity,
-                name=args.wandb_name or f"{args.data}-{args.path}-{args.target}{loss_tag}-s{args.seed}",
+                name=args.wandb_name or f"{data_tag}-{args.path}-{args.target}{loss_tag}-s{args.seed}",
                 group=args.wandb_group,
                 tags=args.wandb_tags,
                 out_dir=out_dir,
                 config={**meta, **vars(config), "seed": args.seed,
                         "batch_size": args.batch_size, "t_dist": args.t_dist,
+                        "t_mean": args.t_mean, "t_std": args.t_std,
                         "n_params": n_params},
             )
             if args.tracker == "wandb"

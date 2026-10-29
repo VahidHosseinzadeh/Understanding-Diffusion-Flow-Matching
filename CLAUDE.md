@@ -73,7 +73,15 @@ special-casing samplers.
   later checkpoint would silently reuse the first one's features.
 - Loading a checkpoint -> `checkpoint.load_checkpoint`, the one place
   that rebuilds model, path and target from `meta`.
-- New architecture -> new file, must satisfy `forward(x, t)`.
+- Weights trained elsewhere -> `dfm/convert.py`: a reader plus a list of
+  regex renames per format, producing an ordinary checkpoint with `meta`.
+  A convention of theirs that weights do not show (time scaling, norm
+  gains) becomes an option of our model, set in its presets
+  (`jit.JIT_PRESETS`) -- never a special case in `load_checkpoint`.
+- New architecture -> new file, must satisfy `forward(x, t)`. One with
+  more knobs than `meta`'s flat keys stores its resolved constructor
+  arguments under its own key, as `JiT.config()` does (`meta["jit"]`),
+  so a later change of default cannot break old checkpoints.
 - Conditioning -> an embedding added to the time embedding
   (`embeddings.LabelEmbedding`), the label threaded through
   `interpolant_loss(labels=...)`; keep the unconditional path working via

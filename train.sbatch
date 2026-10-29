@@ -17,8 +17,8 @@
 #   SAMPLER      euler | heun                        (default: euler)
 #   DATA         fashion_mnist | moons |
 #                eight_gaussians | spiral            (default: fashion_mnist)
-#   MODEL        unet | mlp        (default: empty = auto, mlp for 2D data,
-#                                   unet for images -- usually leave it alone)
+#   MODEL        unet | mlp | jit  (default: empty = auto, mlp for 2D data,
+#                                   unet for images; jit is the Transformer)
 #   T_DIST       uniform | logit_normal              (default: uniform)
 #   EPOCHS                                           (default: 30)
 #   BATCH_SIZE                                       (default: 128)
@@ -42,6 +42,8 @@
 #   EXTRA="--lr 1e-4 --base-channels 32" sbatch train.sbatch
 #   DIAGNOSTICS=1 TARGET=noise sbatch train.sbatch   # see the boundary blow-up
 #   CLASS_COND=1 sbatch train.sbatch                 # then sample with --cfg-scale
+#   MODEL=jit CLASS_COND=1 TARGET=x_data LOSS_SPACE=velocity T_DIST=logit_normal \
+#     EXTRA="--in-context-tokens 8" sbatch train.sbatch   # JiT's recipe
 #
 #   # the comparison the three-axis split exists for -- one run per target,
 #   # all in one wandb group so their curves overlay:
@@ -117,7 +119,7 @@ PYTHONPATH=dfm python -c "from utils import get_device; print('device:', get_dev
 # --- the run ---------------------------------------------------------
 # Run name and out-dir both carry the varying knobs, so two runs of the
 # same sweep never collide on disk or become indistinguishable in wandb.
-RUN_ID="${DATA}_${FM_PATH}_${TARGET}${LOSS_SPACE:+_${LOSS_SPACE}-loss}${CLASS_COND:+_cond}_s${SEED}_${SLURM_JOB_ID}"
+RUN_ID="${DATA}${MODEL:+_${MODEL}}_${FM_PATH}_${TARGET}${LOSS_SPACE:+_${LOSS_SPACE}-loss}${CLASS_COND:+_cond}_s${SEED}_${SLURM_JOB_ID}"
 
 ARGS=(
     --data "$DATA"

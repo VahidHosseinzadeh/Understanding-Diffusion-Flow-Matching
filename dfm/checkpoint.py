@@ -13,6 +13,7 @@ from typing import Any, NamedTuple
 import torch
 import torch.nn as nn
 
+from jit import JiT
 from mlp import MLP
 from paths import PATHS, Path
 from targets import TARGETS, Target
@@ -43,6 +44,10 @@ def load_checkpoint(checkpoint: str, device: torch.device, use_ema: bool = True)
 
     if meta["model"] == "mlp":
         model = MLP(dim=2, hidden=meta["hidden"], depth=meta["depth"])
+    elif meta["model"] == "jit":
+        # JiT has too many knobs to spread across meta; it hands train.py
+        # its own resolved config.
+        model = JiT(**meta["jit"], num_classes=meta.get("num_classes"))
     else:
         # num_classes is absent from checkpoints older than conditioning;
         # those are unconditional, which None reproduces exactly.
@@ -60,4 +65,9 @@ def load_checkpoint(checkpoint: str, device: torch.device, use_ema: bool = True)
 
 def sample_shape(meta: dict[str, Any]) -> tuple[int, ...]:
     """The shape of one sample, without the batch dimension."""
-    return (2,) if meta["model"] == "mlp" else (1, 28, 28)
+    if meta["model"] == "mlp":
+        return (2,)
+    if meta["model"] == "jit":  # any size: converted ImageNet weights as well as ours
+        config = meta["jit"]
+        return (config["in_channels"], config["img_size"], config["img_size"])
+    return (1, 28, 28)
