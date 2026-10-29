@@ -57,7 +57,9 @@ dfm/
   tracking.py   optional Weights & Biases logging
   utils.py      seeding, device, EMA
   checkpoint.py rebuilds model, path and target from a checkpoint's meta
-  convert.py    foreign weights -> a checkpoint of ours (Li & He's JiT)
+  jit_official.py Li & He's own JiT code, for their pretrained weights (GPU)
+  jit_mac.py    the same without its .cuda() calls, for Mac or CPU
+  jit_pretrained.py puts either behind our model interface, loads their files
   metrics.py    FID / KID / IS / precision-recall, via torch-fidelity
   train.py      python dfm/train.py --data moons
   sample.py     python dfm/sample.py --checkpoint ... --sampler heun
@@ -245,37 +247,32 @@ harmless for x-prediction.
 
 ### Li & He's pretrained weights
 
-`jit.JIT_PRESETS` rebuilds the paper's six ImageNet models exactly. B, L
-and H are ViT's Base, Large and Huge sizes; /16 and /32 are the patch
-size. `convert.py` turns their released weights into an ordinary checkpoint
-of ours. After that, sample.py and every sampler use them unchanged:
+Their weights run in their own code. `jit_official.py` is Li & He's
+model_jit.py and model_util.py, copied verbatim. The edits are an import
+line and einops' reshapes written in torch, each marked `# dfm:`, and
+none changes the arithmetic. Like their code, it calls .cuda() itself and
+compiles its blocks with torch.compile. `jit_mac.py` is the same code
+with only its CUDA-specific lines made device-agnostic, for MPS or the
+CPU; a test checks that those are the only differences.
+`jit_pretrained.py` picks the copy for the device and gives it our
+`forward(x, t, y=None)`. `load_checkpoint` recognises their
+`checkpoint-last.pth` by its contents and works out which model it is
+from the tensor shapes. B, L and H are ViT's Base, Large and Huge sizes;
+/16 and /32 are the patch size. sample.py and every sampler then use it
+like any checkpoint of ours:
 
 ```bash
-# official release (one folder per model on the authors' Dropbox; B/16 is 1.5 GB:
-# raw weights plus two EMAs), or the single-weight mirror BiliSakura/JiT-diffusers
-python dfm/convert.py jit-official checkpoint-last.pth --preset JiT-B/16 --out jit_b16.pt
-python dfm/convert.py jit-diffusers diffusion_pytorch_model.safetensors \
-    --preset JiT-B/16 --out jit_b16.pt                   # needs: pip install safetensors
-
-# their sampler settings for B/16: Heun 50 steps, guidance 3 for t in [0.1, 1]
-python dfm/sample.py --checkpoint jit_b16.pt --sampler heun --steps 50 \
+# one folder per model on the authors' Dropbox (README of github.com/LTH14/JiT);
+# B/16's checkpoint-last.pth is 1.5 GB: raw weights plus two EMAs
+python dfm/sample.py --checkpoint jit-b-16/checkpoint-last.pth --sampler heun --steps 50 \
     --cfg-scale 3 --guidance-interval 0.1 1 --label 207 360 387 974 88 979 417 279 --n 32 \
     --tracker wandb --wandb-group pretrained-jit
 ```
 
-Two settings differ from our small default, and the presets set both:
-
-- `time_scale=1`: their t enters the time embedding unscaled.
-- `norm_gain=True`: their RMSNorms keep a learned gain before adaLN.
-
-The converter checks names, shapes and the fixed position codes rather
-than trusting them. `tests/test_convert.py` checks the layouts against
-the operations the reference code runs.
-
-Weights from another JiT implementation need one more list of regex
-renames in `convert.RENAMES` and a reader. The /32 models are not
-supported yet: they were trained with noise of standard deviation 2,
-which no Path here provides.
+Those are their settings for B/16: Heun with 50 steps, and guidance 3
+for t in [0.1, 1]. EMA weights mean their `model_ema1`; `--no-ema` gives
+the raw weights. The /32 models are not supported yet: they were trained
+with noise of standard deviation 2, which no Path here provides.
 
 ## Evaluation
 

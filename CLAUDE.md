@@ -73,11 +73,16 @@ special-casing samplers.
   later checkpoint would silently reuse the first one's features.
 - Loading a checkpoint -> `checkpoint.load_checkpoint`, the one place
   that rebuilds model, path and target from `meta`.
-- Weights trained elsewhere -> `dfm/convert.py`: a reader plus a list of
-  regex renames per format, producing an ordinary checkpoint with `meta`.
-  A convention of theirs that weights do not show (time scaling, norm
-  gains) becomes an option of our model, set in its presets
-  (`jit.JIT_PRESETS`) -- never a special case in `load_checkpoint`.
+- Someone else's pretrained weights -> run them in *their* model code,
+  never convert them into ours. Copy that code verbatim into its own file
+  (`dfm/jit_official.py`), including its .cuda() calls and torch.compile:
+  it runs on a GPU, as theirs does. Edit only imports and dependencies
+  (no arithmetic), marked `# dfm:`. A `_mac` twin (`dfm/jit_mac.py`)
+  differs only in its CUDA-specific lines, which a test enforces. Our
+  wrapper (`dfm/jit_pretrained.py`) gives the `forward(x, t, y=None)`
+  contract and picks the copy by device; `load_checkpoint` recognises
+  their checkpoint format and supplies the `meta` (path, target) their
+  file lacks.
 - New architecture -> new file, must satisfy `forward(x, t)`. One with
   more knobs than `meta`'s flat keys stores its resolved constructor
   arguments under its own key, as `JiT.config()` does (`meta["jit"]`),

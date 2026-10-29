@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 
 from jit import JiT
+from jit_pretrained import load_official
 from mlp import MLP
 from paths import PATHS, Path
 from targets import TARGETS, Target
@@ -35,6 +36,17 @@ def load_checkpoint(checkpoint: str, device: torch.device, use_ema: bool = True)
     and what you would ship.
     """
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
+    if "meta" not in ckpt and "model_ema1" in ckpt:
+        # Li & He's own checkpoint-last.pth: their model, their weights.
+        model, meta = load_official(ckpt, device, use_ema)
+        return Loaded(
+            model=model.to(device).eval(),
+            path=PATHS[meta["path"]](beta_min=meta["beta_min"]),
+            target=TARGETS[meta["target"]](),
+            meta=meta,
+            epoch=ckpt.get("epoch"),
+        )
+
     meta = ckpt.get("meta", {})
     if not meta:
         raise SystemExit(
@@ -67,7 +79,9 @@ def sample_shape(meta: dict[str, Any]) -> tuple[int, ...]:
     """The shape of one sample, without the batch dimension."""
     if meta["model"] == "mlp":
         return (2,)
-    if meta["model"] == "jit":  # any size: converted ImageNet weights as well as ours
+    if meta["model"] == "jit":
         config = meta["jit"]
         return (config["in_channels"], config["img_size"], config["img_size"])
+    if meta["model"] == "jit_official":
+        return (3, meta["img_size"], meta["img_size"])
     return (1, 28, 28)

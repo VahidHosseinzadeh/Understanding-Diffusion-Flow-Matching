@@ -28,17 +28,15 @@ Interface contract, the same as the UNet's: `forward(x, t, y=None)` with
 x (B, C, H, W), t (B,) in [0, 1], and y class labels (NULL_LABEL for "no
 label") only for a model built with `num_classes`.
 
-Differences from the reference code (github.com/LTH14/JiT). The first
-two are options, so `JIT_PRESETS` rebuilds Li & He's models exactly and
-`convert.py` can load their weights:
+Differences from the reference code (github.com/LTH14/JiT). That code
+itself, for running Li & He's pretrained weights, is jit_official.py.
   - time goes through `embeddings.TimeEmbedding`, shared with the UNet
     and the MLP, which multiplies t by 1000 first. JiT's code passes t in
-    [0, 1] to DiT's embedder unscaled, so its time features vary slowly
-    (`time_scale=1`).
+    [0, 1] to DiT's embedder unscaled, so its time features vary slowly.
+  - the label table starts at zero (`embeddings.LabelEmbedding`).
   - a norm followed by a modulation has no gain of its own: adaLN's
     (1 + scale) already is one, so a second only reparameterises it
-    (DiT's LayerNorm drops it too). JiT's RMSNorms keep it (`norm_gain`).
-  - the label table starts at zero (`embeddings.LabelEmbedding`).
+    (DiT's LayerNorm drops it too).
   - patches are embedded by a linear map on `patchify`'s vectors instead
     of a stride-p convolution (the same map), attention runs through
     F.scaled_dot_product_attention, and positions are buffers rebuilt
@@ -94,10 +92,8 @@ def sincos_positions(rows: int, cols: int, dim: int) -> torch.Tensor:
 
     Attention treats its tokens as a set, so without these the network
     could not tell where a patch came from. The 1D codes of Vaswani et al.
-    2017, once for the column in half the channels and once for the row
-    in the other half. Either order works as well; this is the one MAE's
-    code produces, which DiT and JiT copy, so pretrained weights find
-    the codes they were trained with.
+    2017, once for the row in half the channels and once for the column
+    in the other half, as in MAE and DiT.
     """
     def axis(pos: torch.Tensor, d: int) -> torch.Tensor:
         omega = 10000.0 ** (-torch.arange(d // 2, dtype=torch.float64) / (d // 2))
@@ -105,7 +101,7 @@ def sincos_positions(rows: int, cols: int, dim: int) -> torch.Tensor:
         return torch.cat([angle.sin(), angle.cos()], dim=1)
 
     r, c = _grid(rows, cols)
-    return torch.cat([axis(c, dim // 2), axis(r, dim // 2)], dim=1).float()
+    return torch.cat([axis(r, dim // 2), axis(c, dim // 2)], dim=1).float()
 
 
 class PatchEmbed(nn.Module):
@@ -266,11 +262,11 @@ class JiTBlock(nn.Module):
     against 35.2.
     """
 
-    def __init__(self, width: int, heads: int, mlp_ratio: float = 4.0, norm_gain: bool = False):
+    def __init__(self, width: int, heads: int, mlp_ratio: float = 4.0):
         super().__init__()
-        self.norm1 = RMSNorm(width, gain=norm_gain)
+        self.norm1 = RMSNorm(width, gain=False)
         self.attn = Attention(width, heads)
-        self.norm2 = RMSNorm(width, gain=norm_gain)
+        self.norm2 = RMSNorm(width, gain=False)
         self.mlp = SwiGLU(width, mlp_ratio)
         self.ada = nn.Linear(width, 6 * width)  # zero-initialised by JiT
 
@@ -285,9 +281,9 @@ class FinalLayer(nn.Module):
     token back to its p*p*C pixels. Zero-initialised, so a fresh model
     predicts 0 everywhere, as the UNet does."""
 
-    def __init__(self, width: int, patch_dim: int, norm_gain: bool = False):
+    def __init__(self, width: int, patch_dim: int):
         super().__init__()
-        self.norm = RMSNorm(width, gain=norm_gain)
+        self.norm = RMSNorm(width, gain=False)
         self.ada = nn.Linear(width, 2 * width)
         self.out = nn.Linear(width, patch_dim)
 
@@ -314,9 +310,6 @@ class JiT(nn.Module):
     Every patch can then attend to the label directly, on top of adaLN.
     JiT uses 32 next to 256 patches, worth ~1.2 FID on ImageNet. They carry
     the label, so they need `num_classes`.
-
-    `time_scale` and `norm_gain` exist to match weights trained elsewhere
-    (see the module docstring); `JIT_PRESETS` sets them for Li & He's.
     """
 
     def __init__(
@@ -332,8 +325,6 @@ class JiT(nn.Module):
         in_context_tokens: int = 0,
         in_context_start: int | None = None,
         time_freqs: int = 256,
-        time_scale: float = 1000.0,
-        norm_gain: bool = False,
         num_classes: int | None = None,
     ):
         super().__init__()
@@ -355,7 +346,6 @@ class JiT(nn.Module):
             width=width, depth=depth, heads=heads, mlp_ratio=mlp_ratio,
             bottleneck_dim=bottleneck_dim, in_context_tokens=in_context_tokens,
             in_context_start=in_context_start, time_freqs=time_freqs,
-            time_scale=time_scale, norm_gain=norm_gain,
         )
         self.img_size = img_size
         self.in_channels = in_channels
@@ -365,7 +355,7 @@ class JiT(nn.Module):
         patch_dim = patch_size * patch_size * in_channels
 
         # Conditioning: the same two embeddings as the UNet, summed.
-        self.time_emb = TimeEmbedding(time_freqs, width, scale=time_scale)
+        self.time_emb = TimeEmbedding(time_freqs, width)
         self.label_emb = LabelEmbedding(num_classes, width) if num_classes else None
         self.context_pos = (
             nn.Parameter(0.02 * torch.randn(in_context_tokens, width)) if in_context_tokens else None
@@ -374,8 +364,8 @@ class JiT(nn.Module):
         self.patch_embed = PatchEmbed(patch_dim, width, bottleneck_dim)
         self.register_buffer("pos", sincos_positions(grid, grid, width), persistent=False)
         self.rope = Rope2d(width // heads, grid, grid)
-        self.blocks = nn.ModuleList(JiTBlock(width, heads, mlp_ratio, norm_gain) for _ in range(depth))
-        self.final = FinalLayer(width, patch_dim, norm_gain)
+        self.blocks = nn.ModuleList(JiTBlock(width, heads, mlp_ratio) for _ in range(depth))
+        self.final = FinalLayer(width, patch_dim)
         self._init_weights()
 
     def _init_weights(self) -> None:
@@ -421,31 +411,3 @@ class JiT(nn.Module):
             h = block(h, c, self.rope, n_prefix)
         h = self.final(h[:, n_prefix:], c)
         return unpatchify(h, self.patch_size, C, H, W)
-
-
-# --------------------------------------------------------------------
-# Li & He's models
-# --------------------------------------------------------------------
-
-def _li_he(patch_size: int, width: int, depth: int, heads: int, bottleneck: int,
-           context_start: int) -> dict[str, Any]:
-    return dict(
-        img_size=16 * patch_size, in_channels=3, patch_size=patch_size,
-        width=width, depth=depth, heads=heads, mlp_ratio=4.0,
-        bottleneck_dim=bottleneck, in_context_tokens=32, in_context_start=context_start,
-        time_freqs=256, time_scale=1.0, norm_gain=True,
-    )
-
-
-# Constructor arguments (all but num_classes) for the six ImageNet models
-# of Li & He 2025, as in model_jit.py. B, L and H are ViT's Base, Large and
-# Huge sizes (Dosovitskiy et al. 2021); /16 and /32 are the patch size, and
-# both give a 16 x 16 grid of 256 tokens: /16 at 256x256 and /32 at 512x512.
-JIT_PRESETS: dict[str, dict[str, Any]] = {
-    "JiT-B/16": _li_he(16, 768, 12, 12, 128, 4),
-    "JiT-B/32": _li_he(32, 768, 12, 12, 128, 4),
-    "JiT-L/16": _li_he(16, 1024, 24, 16, 128, 8),
-    "JiT-L/32": _li_he(32, 1024, 24, 16, 128, 8),
-    "JiT-H/16": _li_he(16, 1280, 32, 16, 256, 10),
-    "JiT-H/32": _li_he(32, 1280, 32, 16, 256, 10),
-}

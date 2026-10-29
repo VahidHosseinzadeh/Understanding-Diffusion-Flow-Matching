@@ -93,8 +93,8 @@ def read_official(file: str, ema: str) -> tuple[StateDict, StateDict, int | None
 
 
 def read_diffusers(file: str, ema: str) -> tuple[StateDict, StateDict, int | None]:
-    """A single set of weights, which the mirror does not label. For
-    JiT-B/16 it is the authors' model_ema1, bit for bit."""
+    """A single set of weights; the mirror does not say which of the
+    authors' three it is (compare with jit-official to find out)."""
     try:
         from safetensors.torch import load_file
     except ImportError as exc:  # pragma: no cover - depends on env
@@ -145,8 +145,8 @@ def check_positions(theirs: torch.Tensor, ours: torch.Tensor) -> None:
     sample nonsense. Compare instead.
 
     The tolerance is loose on purpose. Li & He's EMA averages every
-    parameter, the frozen codes included, and averaging a constant some
-    10^5 times in float32 drifts: their ema1 codes are off by 1.6e-4, against
+    parameter, the frozen codes included, and averaging a constant 10^5
+    times in float32 drifts: their ema1 codes are off by 1.6e-4, against
     0 in their raw weights. A swapped axis or a wrong grid is off by ~1.
     """
     theirs = theirs.reshape(ours.shape).to(ours)

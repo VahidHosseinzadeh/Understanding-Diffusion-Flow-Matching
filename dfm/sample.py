@@ -21,9 +21,9 @@ draws class k only, and several labels draw one column each:
     python dfm/sample.py --checkpoint ... --cfg-scale 3 --label 7
     python dfm/sample.py --checkpoint ... --cfg-scale 3 --label 0 5 7 --n 12
 
-Weights trained elsewhere sample the same way once convert.py has made
-them a checkpoint of ours. --tracker wandb also logs the grid and the
-settings that drew it.
+Li & He's own JiT checkpoints (checkpoint-last.pth) load as they are,
+into their own model code (jit_pretrained.py). --tracker wandb also logs
+the grid and the settings that drew it.
 """
 from __future__ import annotations
 

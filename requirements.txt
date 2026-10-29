@@ -21,10 +21,6 @@ pytest
 #   pip install wandb
 # wandb
 
-# Optional: reading .safetensors weights, for dfm/convert.py only.
-#   pip install safetensors
-# safetensors
-
 # Optional: FID / KID / IS / precision-recall, for dfm/evaluate.py only.
 # Nothing else imports it, and the tests never need it.
 #   pip install torch-fidelity

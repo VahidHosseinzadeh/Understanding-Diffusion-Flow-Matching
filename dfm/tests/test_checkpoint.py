@@ -10,7 +10,7 @@ import pytest
 import torch
 
 from checkpoint import load_checkpoint, sample_shape
-from jit import JIT_PRESETS, JiT
+from jit import JiT
 from mlp import MLP
 from paths import LinearPath
 from targets import DataTarget
@@ -53,7 +53,7 @@ def test_sample_shape_follows_the_architecture():
     assert sample_shape({"model": "mlp"}) == (2,)
     assert sample_shape({"model": "unet"}) == (1, 28, 28)
     assert sample_shape({"model": "jit", "jit": JiT().config()}) == (1, 28, 28)
-    assert sample_shape({"model": "jit", "jit": JIT_PRESETS["JiT-B/16"]}) == (3, 256, 256)
+    assert sample_shape({"model": "jit_official", "img_size": 256}) == (3, 256, 256)
 
 
 def test_refuses_a_checkpoint_without_meta(tmp_path):

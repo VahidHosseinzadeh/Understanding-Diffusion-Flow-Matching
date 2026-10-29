@@ -20,19 +20,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def sinusoidal_embedding(
-    t: torch.Tensor, dim: int, max_period: float = 10000.0, scale: float = 1000.0
-) -> torch.Tensor:
+def sinusoidal_embedding(t: torch.Tensor, dim: int, max_period: float = 10000.0) -> torch.Tensor:
     """Transformer-style sinusoidal features for t in [0, 1].
 
     The rescale by 1000 is convention, not necessity: diffusion papers
     embed an integer step in [0, 1000), so multiplying keeps the
     frequency band in the range those hyperparameters were tuned for.
     Without it the low frequencies are nearly constant across [0, 1] and
-    the network struggles to tell nearby times apart. `scale` exists for
-    weights trained without it: Li & He's JiT embeds t unscaled (scale=1).
+    the network struggles to tell nearby times apart.
     """
-    t = t.float() * scale
+    t = t.float() * 1000.0
     half = dim // 2
     freqs = torch.exp(
         -math.log(max_period) * torch.arange(half, device=t.device, dtype=torch.float32) / half
@@ -47,10 +44,9 @@ def sinusoidal_embedding(
 class TimeEmbedding(nn.Module):
     """sinusoidal features -> MLP -> a vector each block can condition on."""
 
-    def __init__(self, dim: int, out_dim: int, scale: float = 1000.0):
+    def __init__(self, dim: int, out_dim: int):
         super().__init__()
         self.dim = dim
-        self.scale = scale
         self.net = nn.Sequential(
             nn.Linear(dim, out_dim),
             nn.SiLU(),
@@ -58,7 +54,7 @@ class TimeEmbedding(nn.Module):
         )
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
-        return self.net(sinusoidal_embedding(t, self.dim, scale=self.scale))
+        return self.net(sinusoidal_embedding(t, self.dim))
 
 
 # "No label". Classifier-free guidance needs the unconditional field from
